@@ -28,16 +28,24 @@ npm run dev
 ## 📚 Документация
 
 - [QUICK_DEPLOY.md](./QUICK_DEPLOY.md) - Быстрый деплой
-- [DEPLOYMENT.md](./DEPLOYMENT.md) - Подробная инструкция по деплою
 - [WEBSOCKET_SETUP.md](./WEBSOCKET_SETUP.md) - Настройка WebSocket
-- [TUNNEL_SETUP.md](./TUNNEL_SETUP.md) - Настройка туннеля для тестирования
+- [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) - Решение проблем
 
 ## 🛠 Технологии
 
+### Frontend:
 - Vue 3
 - Vite
-- Socket.IO (WebSocket)
-- Express (Backend)
+
+### Backend:
+- **Node.js** с **Express** (HTTP сервер)
+- **Socket.IO** (WebSocket для реального времени)
+- **CORS** (для кросс-доменных запросов)
+
+Бэкенд реализован в файле `server-example.js` и использует:
+- Express для HTTP endpoints
+- Socket.IO для WebSocket соединений и управления комнатами
+- In-memory хранилище для комнат и пользователей
 
 ## 📝 Лицензия
 

@@ -35,7 +35,9 @@ class WebSocketService {
 
       this.socket.on("connect_error", (error) => {
          console.error("❌ WebSocket connection error:", error.message);
+         console.error("Error details:", error);
          console.error("Trying to connect to:", serverUrl);
+         console.error("Check if backend is accessible at:", serverUrl);
       });
 
       this.socket.on("reconnect", (attemptNumber) => {

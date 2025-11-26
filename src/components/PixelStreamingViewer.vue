@@ -181,6 +181,7 @@ onMounted(() => {
    const joinRoomAfterConnect = () => {
       const roomId = getRoomId();
       console.log("📝 Joining room:", roomId);
+      console.log("👤 User data:", { name: props.userName, role: props.role });
 
       websocketService.joinRoom(roomId, {
          name: props.userName,

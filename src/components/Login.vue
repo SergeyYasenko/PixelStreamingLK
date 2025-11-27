@@ -181,14 +181,18 @@ const fetchAvailableRooms = async () => {
                // Функция для проверки доступности streamer через прокси
                const checkStreamerAvailability = async (streamerId, label) => {
                   try {
+                     // Добавляем cache-buster для предотвращения кеширования
+                     const cacheBuster = `&t=${Date.now()}`;
                      const checkResponse = await fetch(
                         `${wsServerUrl}/api/proxy/check-streamer?streamerId=${encodeURIComponent(
                            streamerId
-                        )}`,
+                        )}${cacheBuster}`,
                         {
                            method: "GET",
                            headers: {
                               "Content-Type": "application/json",
+                              "Cache-Control": "no-cache",
+                              Pragma: "no-cache",
                            },
                         }
                      );
@@ -201,6 +205,10 @@ const fetchAvailableRooms = async () => {
                      }
                      return null;
                   } catch (checkError) {
+                     console.error(
+                        `Error checking streamer ${streamerId}:`,
+                        checkError
+                     );
                      return null;
                   }
                };

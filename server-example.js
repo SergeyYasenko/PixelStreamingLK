@@ -217,6 +217,11 @@ app.get("/api/proxy/streamers", async (req, res) => {
 
 // Прокси для проверки доступности streamer
 app.get("/api/proxy/check-streamer", async (req, res) => {
+   // Отключаем кеширование для этого endpoint
+   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+   res.setHeader("Pragma", "no-cache");
+   res.setHeader("Expires", "0");
+
    try {
       const { streamerId } = req.query;
 
@@ -224,10 +229,32 @@ app.get("/api/proxy/check-streamer", async (req, res) => {
          return res.status(400).json({ error: "streamerId is required" });
       }
 
-      // Используем тот же хост, что и у запроса, но порт 80 для Pixel Streaming
-      const streamServerHost = req.get("host")?.split(":")[0] || req.hostname || "localhost";
+      // Используем переменную окружения или определяем автоматически
+      let streamServerHost = process.env.STREAM_SERVER_HOST;
+
+      if (!streamServerHost) {
+         const referer = req.get("referer") || "";
+         streamServerHost = req.hostname || "localhost";
+
+         if (referer) {
+            try {
+               const refererUrl = new URL(referer);
+               streamServerHost = refererUrl.hostname;
+            } catch (e) {
+               // Игнорируем ошибки парсинга
+            }
+         }
+
+         if (streamServerHost === "localhost" || streamServerHost === "127.0.0.1") {
+            const hostHeader = req.get("host");
+            if (hostHeader) {
+               streamServerHost = hostHeader.split(":")[0];
+            }
+         }
+      }
+
       const streamServerPort = process.env.STREAM_SERVER_PORT || "80";
-      const protocol = req.protocol || "http";
+      const protocol = process.env.STREAM_SERVER_PROTOCOL || req.protocol || "http";
       const streamServerUrl = streamServerPort === "80" && protocol === "http"
          ? `${protocol}://${streamServerHost}`
          : streamServerPort === "443" && protocol === "https"
@@ -235,21 +262,39 @@ app.get("/api/proxy/check-streamer", async (req, res) => {
             : `${protocol}://${streamServerHost}:${streamServerPort}`;
       const streamerUrl = `${streamServerUrl}/?StreamerId=${streamerId}`;
 
+      console.log(`[Check Streamer] Checking: ${streamerId} at ${streamerUrl}`);
+
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
 
       try {
+         // Делаем GET запрос вместо HEAD для более надежной проверки
          const response = await fetch(streamerUrl, {
-            method: "HEAD",
+            method: "GET",
             signal: controller.signal,
+            headers: {
+               "User-Agent": "Mozilla/5.0 (compatible; StreamChecker/1.0)",
+            },
          });
          clearTimeout(timeoutId);
-         res.json({ available: response.ok || response.status < 500 });
+
+         const status = response.status;
+         const contentType = response.headers.get("content-type") || "";
+
+         // Проверяем, что ответ успешный и это HTML страница (Pixel Streaming возвращает HTML)
+         const isAvailable = (status >= 200 && status < 400) &&
+            (contentType.includes("text/html") || contentType.includes("text/plain"));
+
+         console.log(`[Check Streamer] ${streamerId}: status=${status}, contentType=${contentType}, available=${isAvailable}`);
+
+         res.json({ available: isAvailable });
       } catch (fetchError) {
          clearTimeout(timeoutId);
+         console.log(`[Check Streamer] ${streamerId}: error=${fetchError.message}`);
          res.json({ available: false });
       }
    } catch (error) {
+      console.error(`[Check Streamer] Error:`, error);
       res.json({ available: false });
    }
 });

@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from "vue";
+import { ref, onMounted } from "vue";
 import Login from "./components/Login.vue";
 import PixelStreamingViewer from "./components/PixelStreamingViewer.vue";
 
@@ -9,9 +9,38 @@ const userData = ref({
    streamerId: "",
 });
 
+const STORAGE_KEY = "pixelstreaming_user";
+
+// Восстанавливаем состояние при загрузке страницы
+onMounted(() => {
+   try {
+      const savedData = localStorage.getItem(STORAGE_KEY);
+      if (savedData) {
+         const parsed = JSON.parse(savedData);
+         if (parsed.name && parsed.streamerId) {
+            userData.value = {
+               name: parsed.name,
+               streamerId: parsed.streamerId,
+            };
+            isLoggedIn.value = true;
+         }
+      }
+   } catch (error) {
+      console.error("Error loading saved user data:", error);
+      localStorage.removeItem(STORAGE_KEY);
+   }
+});
+
 const handleLoginSuccess = (data) => {
    userData.value = data;
    isLoggedIn.value = true;
+
+   // Сохраняем данные в localStorage
+   try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+   } catch (error) {
+      console.error("Error saving user data:", error);
+   }
 };
 </script>
 

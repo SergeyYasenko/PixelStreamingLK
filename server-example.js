@@ -47,39 +47,51 @@ app.get("/api/proxy/streamers", async (req, res) => {
    res.setHeader("Expires", "0");
 
    try {
-      // Используем тот же хост, что и у запроса, но порт 80 для Pixel Streaming
-      // Получаем хост из заголовка Referer или Host
-      const referer = req.get("referer") || "";
-      let streamServerHost = req.hostname || "localhost";
+      // Используем переменную окружения для хоста Pixel Streaming сервера
+      // Если не задана, используем хост из запроса
+      let streamServerHost = process.env.STREAM_SERVER_HOST;
 
-      // Пытаемся извлечь хост из Referer
-      if (referer) {
-         try {
-            const refererUrl = new URL(referer);
-            streamServerHost = refererUrl.hostname;
-         } catch (e) {
-            // Если не удалось распарсить, используем hostname из запроса
+      if (!streamServerHost) {
+         // Получаем хост из заголовка Referer или Host
+         const referer = req.get("referer") || "";
+         streamServerHost = req.hostname || "localhost";
+
+         // Пытаемся извлечь хост из Referer
+         if (referer) {
+            try {
+               const refererUrl = new URL(referer);
+               streamServerHost = refererUrl.hostname;
+            } catch (e) {
+               // Если не удалось распарсить, используем hostname из запроса
+            }
          }
-      }
 
-      // Если hostname все еще localhost, пробуем получить из Host заголовка
-      if (streamServerHost === "localhost" || streamServerHost === "127.0.0.1") {
-         const hostHeader = req.get("host");
-         if (hostHeader) {
-            streamServerHost = hostHeader.split(":")[0];
+         // Если hostname все еще localhost, пробуем получить из Host заголовка
+         if (streamServerHost === "localhost" || streamServerHost === "127.0.0.1") {
+            const hostHeader = req.get("host");
+            if (hostHeader) {
+               streamServerHost = hostHeader.split(":")[0];
+            }
          }
       }
 
       const streamServerPort = process.env.STREAM_SERVER_PORT || "80";
-      const protocol = req.protocol || "http";
+      const protocol = process.env.STREAM_SERVER_PROTOCOL || req.protocol || "http";
       const streamServerUrl = streamServerPort === "80" && protocol === "http"
          ? `${protocol}://${streamServerHost}`
          : streamServerPort === "443" && protocol === "https"
             ? `${protocol}://${streamServerHost}`
             : `${protocol}://${streamServerHost}:${streamServerPort}`;
 
+      console.log(`[Proxy] ==========================================`);
+      console.log(`[Proxy] Request received at: ${new Date().toISOString()}`);
+      console.log(`[Proxy] Request hostname: ${req.hostname}`);
+      console.log(`[Proxy] Request host header: ${req.get("host")}`);
+      console.log(`[Proxy] Request referer: ${req.get("referer")}`);
+      console.log(`[Proxy] STREAM_SERVER_HOST env: ${process.env.STREAM_SERVER_HOST || "not set"}`);
+      console.log(`[Proxy] Determined stream server host: ${streamServerHost}`);
       console.log(`[Proxy] Attempting to fetch streamers from: ${streamServerUrl}`);
-      console.log(`[Proxy] Request hostname: ${req.hostname}, Referer: ${referer}`);
+      console.log(`[Proxy] ==========================================`);
 
       const possibleEndpoints = [
          "/api/streamers",
@@ -103,10 +115,12 @@ app.get("/api/proxy/streamers", async (req, res) => {
             });
 
             console.log(`[Proxy] Response status: ${response.status} for ${fullUrl}`);
+            console.log(`[Proxy] Response headers:`, Object.fromEntries(response.headers.entries()));
 
             if (response.ok) {
                const data = await response.json();
-               console.log(`[Proxy] Response data:`, data);
+               console.log(`[Proxy] Response data type: ${typeof data}, isArray: ${Array.isArray(data)}`);
+               console.log(`[Proxy] Response data:`, JSON.stringify(data, null, 2));
 
                let streamersList = null;
 
@@ -127,6 +141,7 @@ app.get("/api/proxy/streamers", async (req, res) => {
             }
          } catch (error) {
             console.log(`[Proxy] Error for endpoint ${endpoint}:`, error.message);
+            console.log(`[Proxy] Error stack:`, error.stack);
             // Продолжаем пробовать другие endpoints
             continue;
          }
@@ -135,6 +150,8 @@ app.get("/api/proxy/streamers", async (req, res) => {
       // Если API не предоставляет список, пробуем проверить доступность через прямые запросы
       // Используем список возможных StreamerId для проверки
       console.log(`[Proxy] No API endpoints worked, trying direct streamer checks`);
+      console.log(`[Proxy] Will check streamers at: ${streamServerUrl}`);
+
       const possibleStreamerIds = [
          "DefaultStreamer",
          "Streamer1",
@@ -147,8 +164,10 @@ app.get("/api/proxy/streamers", async (req, res) => {
       for (const streamerId of possibleStreamerIds) {
          try {
             const streamerUrl = `${streamServerUrl}/?StreamerId=${streamerId}`;
+            console.log(`[Proxy] Checking streamer: ${streamerUrl}`);
+
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 1000);
+            const timeoutId = setTimeout(() => controller.abort(), 2000);
 
             try {
                const response = await fetch(streamerUrl, {
@@ -157,15 +176,21 @@ app.get("/api/proxy/streamers", async (req, res) => {
                });
                clearTimeout(timeoutId);
 
+               console.log(`[Proxy] Streamer ${streamerId} response status: ${response.status}`);
+
                if (response.ok || response.status < 500) {
                   availableStreamers.push(streamerId);
-                  console.log(`[Proxy] Streamer ${streamerId} is available`);
+                  console.log(`[Proxy] ✓ Streamer ${streamerId} is available`);
+               } else {
+                  console.log(`[Proxy] ✗ Streamer ${streamerId} returned status ${response.status}`);
                }
             } catch (fetchError) {
                clearTimeout(timeoutId);
+               console.log(`[Proxy] ✗ Streamer ${streamerId} fetch error:`, fetchError.message);
                // Игнорируем ошибки для недоступных streamers
             }
          } catch (error) {
+            console.log(`[Proxy] ✗ Streamer ${streamerId} error:`, error.message);
             // Игнорируем ошибки
          }
       }
@@ -176,10 +201,16 @@ app.get("/api/proxy/streamers", async (req, res) => {
       }
 
       // Если ни один endpoint не сработал, возвращаем пустой массив
-      console.log(`[Proxy] No streamers found, returning empty array`);
-      res.json([]);
+      console.log(`[Proxy] ==========================================`);
+      console.log(`[Proxy] Final result: ${availableStreamers.length} streamers found`);
+      console.log(`[Proxy] Returning:`, availableStreamers.length > 0 ? availableStreamers : "[]");
+      console.log(`[Proxy] ==========================================`);
+      res.json(availableStreamers);
    } catch (error) {
-      console.error(`[Proxy] Error:`, error);
+      console.error(`[Proxy] ==========================================`);
+      console.error(`[Proxy] FATAL ERROR:`, error);
+      console.error(`[Proxy] Error stack:`, error.stack);
+      console.error(`[Proxy] ==========================================`);
       res.status(500).json({ error: "Failed to fetch streamers", message: error.message });
    }
 });

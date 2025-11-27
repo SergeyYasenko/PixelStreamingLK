@@ -31,7 +31,7 @@
                class="pixelstreaming-iframe"
                frameborder="0"
                scrolling="no"
-               allow="autoplay; fullscreen; microphone; camera; gamepad"
+               allow="autoplay; fullscreen; microphone; camera; gamepad; display-capture"
                @load="handleIframeLoad"
                @error="handleIframeError"
             ></iframe>
@@ -105,10 +105,19 @@ const getStreamServerUrl = () => {
 
    // Параметры для Pixel Streaming
    // Pixel Streaming читает параметры из URL при загрузке страницы
+   // Пробуем разные варианты названий параметров
    const params = new URLSearchParams({
       StreamerId: streamerId,
+      // Варианты для микрофона
       UseMicrophone: "true",
+      useMicrophone: "true",
+      UseMic: "true",
+      useMic: "true",
+      // Варианты для веб-камеры
       UseWebcam: "true",
+      useWebcam: "true",
+      UseCamera: "true",
+      useCamera: "true",
       StartVideoMuted: "false",
       AutoConnect: "false",
       LightMode: "false",
@@ -218,6 +227,25 @@ const handleStreamUrlUpdate = (streamUrl) => {
 };
 
 onMounted(() => {
+   // Запрашиваем разрешения на микрофон и камеру заранее
+   const requestMediaPermissions = async () => {
+      try {
+         // Запрашиваем доступ к микрофону и камере
+         const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: true,
+         });
+         // Останавливаем stream сразу, нам нужно только разрешение
+         stream.getTracks().forEach((track) => track.stop());
+         console.log("Media permissions granted");
+      } catch (error) {
+         console.warn("Media permissions denied or not available:", error);
+      }
+   };
+
+   // Запрашиваем разрешения при монтировании компонента
+   requestMediaPermissions();
+
    const wsServerUrl = getWebSocketServerUrl();
 
    const socket = websocketService.connect(wsServerUrl);

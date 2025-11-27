@@ -61,16 +61,6 @@ function normalizeUrl(url) {
 io.on("connection", (socket) => {
    console.log("✅ User connected:", socket.id);
    console.log("📊 Total connections:", io.engine.clientsCount);
-   console.log("🔍 Socket transport:", socket.conn.transport.name);
-   console.log("🔍 Socket remote address:", socket.handshake.address);
-
-   // Логируем все входящие события для отладки
-   const originalOnevent = socket.onevent;
-   socket.onevent = function (packet) {
-      const args = packet.data || [];
-      console.log(`📥 Incoming event: ${args[0]}`, args.slice(1));
-      originalOnevent.call(this, packet);
-   };
 
    // Присоединение к комнате
    socket.on("join-room", ({ roomId, user, streamUrl }) => {
@@ -161,65 +151,34 @@ io.on("connection", (socket) => {
 
       // ВАЖНО: Отправляем синхронизированный Stream URL сразу после users-update
       // Это гарантирует, что клиент получит URL как можно скорее
-      const sendStreamUrlImmediately = () => {
-         if (room.streamUrl) {
-            console.log(`🎬 Sending stream URL immediately after users-update to ${socket.id}:`, room.streamUrl);
-            console.log(`🔍 Socket connected:`, socket.connected);
-            console.log(`🔍 Socket ID:`, socket.id);
-            socket.emit("stream-url-update", room.streamUrl);
-            console.log(`✅ stream-url-update event sent immediately to ${socket.id}`);
-         } else if (streamUrl) {
-            room.streamUrl = streamUrl;
-            console.log(`🎬 Setting and sending stream URL immediately after users-update to ${socket.id}:`, streamUrl);
-            console.log(`🔍 Socket connected:`, socket.connected);
-            console.log(`🔍 Socket ID:`, socket.id);
-            socket.emit("stream-url-update", streamUrl);
-            console.log(`✅ stream-url-update event sent immediately to ${socket.id}`);
-         }
-      };
-
-      // Отправляем сразу (синхронно)
-      sendStreamUrlImmediately();
-
-      // Также отправляем с небольшой задержкой для надежности
-      setTimeout(sendStreamUrlImmediately, 100);
-
-      // Функция для отправки синхронизированного URL всем в комнате
-      const broadcastStreamUrl = () => {
-         if (room.streamUrl) {
-            const clientsInRoom = io.sockets.adapter.rooms.get(normalizedRoomId);
-            const clientCount = clientsInRoom ? clientsInRoom.size : 0;
-            console.log(`🎬 Broadcasting synchronized stream URL to ALL users in room ${normalizedRoomId}:`, room.streamUrl);
-            console.log(`🔍 Clients in room: ${clientCount}`);
-            // Отправляем всем в комнате, включая нового пользователя
-            io.to(normalizedRoomId).emit("stream-url-update", room.streamUrl);
-            console.log(`✅ stream-url-update event sent to room ${normalizedRoomId}`);
-         } else if (streamUrl) {
-            // Если это первый пользователь и URL еще не установлен, устанавливаем и отправляем
-            room.streamUrl = streamUrl;
-            const clientsInRoom = io.sockets.adapter.rooms.get(normalizedRoomId);
-            const clientCount = clientsInRoom ? clientsInRoom.size : 0;
-            console.log(`🎬 Setting and broadcasting stream URL for first user in room ${normalizedRoomId}:`, streamUrl);
-            console.log(`🔍 Clients in room: ${clientCount}`);
-            io.to(normalizedRoomId).emit("stream-url-update", streamUrl);
-            console.log(`✅ stream-url-update event sent to room ${normalizedRoomId}`);
-         } else {
-            console.log(`⚠️ No stream URL to broadcast for room ${normalizedRoomId}`);
-         }
-      };
+      // Отправляем только один раз, чтобы избежать дублирования
+      if (room.streamUrl) {
+         console.log(`🎬 Sending stream URL immediately after users-update to ${socket.id}:`, room.streamUrl);
+         socket.emit("stream-url-update", room.streamUrl);
+         console.log(`✅ stream-url-update event sent to ${socket.id}`);
+      } else if (streamUrl) {
+         room.streamUrl = streamUrl;
+         console.log(`🎬 Setting and sending stream URL immediately after users-update to ${socket.id}:`, streamUrl);
+         socket.emit("stream-url-update", streamUrl);
+         console.log(`✅ stream-url-update event sent to ${socket.id}`);
+      }
 
       // ВАЖНО: Отправляем синхронизированный Stream URL ВСЕМ пользователям в комнате
       // Это гарантирует, что все используют один и тот же URL
       // Используем небольшую задержку, чтобы убедиться, что клиент успел подписаться на события
-      setTimeout(broadcastStreamUrl, 200); // Увеличиваем задержку до 200ms
-
-      // Также отправляем сразу новому пользователю (на случай, если он уже подписан)
-      if (room.streamUrl || streamUrl) {
-         setTimeout(() => {
-            console.log(`🎬 Sending stream URL directly to new user ${socket.id}`);
-            socket.emit("stream-url-update", room.streamUrl || streamUrl);
-         }, 50);
-      }
+      // Но отправляем только один раз через broadcast, так как уже отправили новому пользователю выше
+      setTimeout(() => {
+         if (room.streamUrl) {
+            const clientsInRoom = io.sockets.adapter.rooms.get(normalizedRoomId);
+            const clientCount = clientsInRoom ? clientsInRoom.size : 0;
+            if (clientCount > 1) {
+               // Отправляем только другим пользователям (не новому, так как он уже получил)
+               console.log(`🎬 Broadcasting synchronized stream URL to other users in room ${normalizedRoomId}:`, room.streamUrl);
+               socket.to(normalizedRoomId).emit("stream-url-update", room.streamUrl);
+               console.log(`✅ stream-url-update event broadcasted to room ${normalizedRoomId}`);
+            }
+         }
+      }, 200);
    });
 
    // Покидание комнаты
@@ -284,19 +243,8 @@ io.on("connection", (socket) => {
    });
 
    // Запрос синхронизированного Stream URL (если клиент не получил его автоматически)
-   socket.on("request-stream-url", (data) => {
-      console.log(`📥 request-stream-url event received`);
-      console.log(`📥 Data:`, JSON.stringify(data, null, 2));
-      console.log(`📥 Socket ID:`, socket.id);
-      console.log(`📥 Socket connected:`, socket.connected);
-
-      const { roomId } = data || {};
-      if (!roomId) {
-         console.error(`❌ No roomId provided in request-stream-url`);
-         return;
-      }
-
-      console.log(`🔍 Requested roomId: ${roomId}`);
+   socket.on("request-stream-url", ({ roomId }) => {
+      console.log(`📥 request-stream-url event received: roomId=${roomId}, socketId=${socket.id}`);
       console.log(`🔍 All existing rooms:`, Array.from(rooms.keys()));
 
       // Нормализуем roomId
@@ -371,6 +319,42 @@ io.on("connection", (socket) => {
       }
    });
 
+   // Screen sharing (только для администратора)
+   socket.on("screen-share-start", ({ roomId }) => {
+      console.log(`📺 Screen share start from ${socket.id} in room ${roomId}`);
+      // Уведомляем всех зрителей о начале трансляции
+      socket.to(roomId).emit("screen-share-start", { from: socket.id });
+   });
+
+   socket.on("screen-share-offer", ({ roomId, offer, to }) => {
+      console.log(`📺 Screen share offer received from ${socket.id} in room ${roomId}`);
+      if (to) {
+         // Отправляем конкретному зрителю
+         io.to(to).emit("screen-share-offer", { offer, from: socket.id });
+      } else {
+         // Пересылаем offer всем зрителям в комнате
+         socket.to(roomId).emit("screen-share-offer", { offer, from: socket.id });
+      }
+   });
+
+   socket.on("screen-share-answer", ({ roomId, answer, to }) => {
+      console.log(`📺 Screen share answer received from ${socket.id} to ${to} in room ${roomId}`);
+      // Пересылаем answer администратору
+      io.to(to).emit("screen-share-answer", { answer, from: socket.id });
+   });
+
+   socket.on("ice-candidate", ({ roomId, candidate, to }) => {
+      console.log(`🧊 ICE candidate received from ${socket.id} to ${to} in room ${roomId}`);
+      // Пересылаем ICE candidate
+      io.to(to).emit("ice-candidate", { candidate, from: socket.id });
+   });
+
+   socket.on("screen-share-stop", ({ roomId }) => {
+      console.log(`⏹️ Screen share stop received from ${socket.id} in room ${roomId}`);
+      // Уведомляем всех зрителей о остановке трансляции
+      socket.to(roomId).emit("screen-share-stop", { from: socket.id });
+   });
+
    // Отключение
    socket.on("disconnect", (reason) => {
       console.log("❌ User disconnected:", socket.id, "Reason:", reason);
@@ -410,10 +394,7 @@ io.on("connection", (socket) => {
 });
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, "0.0.0.0", () => {
-   console.log(`🚀 WebSocket server running on port ${PORT}`);
-   console.log(`🌐 Server listening on 0.0.0.0:${PORT}`);
-   console.log(`📡 Socket.IO configured with CORS: *`);
-   console.log(`🔄 Transports: websocket, polling`);
+server.listen(PORT, () => {
+   console.log(`WebSocket server running on port ${PORT}`);
 });
 

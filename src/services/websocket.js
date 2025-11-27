@@ -7,6 +7,11 @@ class WebSocketService {
       this.isConnected = false;
    }
 
+   // Геттер для доступа к socket извне
+   get socketInstance() {
+      return this.socket;
+   }
+
    // Подключение к WebSocket серверу
    connect(serverUrl = "http://localhost:3001") {
       if (this.socket?.connected) {
@@ -177,6 +182,91 @@ class WebSocketService {
          console.log("🔍 Registered listeners for stream-url-update:", listeners.length);
       } else {
          console.error("❌ Cannot subscribe to stream-url-update: socket is null");
+      }
+   }
+
+   // Отправка screen share start (для администратора)
+   sendScreenShareStart(data) {
+      if (this.socket && this.roomId) {
+         this.socket.emit("screen-share-start", {
+            roomId: this.roomId,
+            ...data,
+         });
+      }
+   }
+
+   // Отправка screen share offer (для администратора)
+   sendScreenShareOffer(data) {
+      if (this.socket && this.roomId) {
+         this.socket.emit("screen-share-offer", {
+            roomId: this.roomId,
+            ...data,
+         });
+      }
+   }
+
+   // Отправка screen share answer (для зрителей)
+   sendScreenShareAnswer(data) {
+      if (this.socket && this.roomId) {
+         this.socket.emit("screen-share-answer", {
+            roomId: this.roomId,
+            ...data,
+         });
+      }
+   }
+
+   // Отправка ICE candidate
+   sendIceCandidate(data) {
+      if (this.socket && this.roomId) {
+         this.socket.emit("ice-candidate", {
+            roomId: this.roomId,
+            ...data,
+         });
+      }
+   }
+
+   // Отправка screen share stop (для администратора)
+   sendScreenShareStop(data) {
+      if (this.socket && this.roomId) {
+         this.socket.emit("screen-share-stop", {
+            roomId: this.roomId,
+            ...data,
+         });
+      }
+   }
+
+   // Получение screen share start (для зрителей)
+   onScreenShareStart(callback) {
+      if (this.socket) {
+         this.socket.on("screen-share-start", callback);
+      }
+   }
+
+   // Получение screen share offer (для зрителей)
+   onScreenShareOffer(callback) {
+      if (this.socket) {
+         this.socket.on("screen-share-offer", callback);
+      }
+   }
+
+   // Получение screen share answer (для администратора)
+   onScreenShareAnswer(callback) {
+      if (this.socket) {
+         this.socket.on("screen-share-answer", callback);
+      }
+   }
+
+   // Получение ICE candidate
+   onIceCandidate(callback) {
+      if (this.socket) {
+         this.socket.on("ice-candidate", callback);
+      }
+   }
+
+   // Получение screen share stream (для зрителей)
+   onScreenShareStream(callback) {
+      if (this.socket) {
+         this.socket.on("screen-share-stream", callback);
       }
    }
 

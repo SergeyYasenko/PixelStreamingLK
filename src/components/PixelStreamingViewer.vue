@@ -54,7 +54,10 @@
             </div>
          </div>
          <div class="pixelstreaming-wrapper">
+            <!-- Администратор видит iframe с Vagon Stream -->
             <iframe
+               v-if="isAdmin"
+               ref="iframeRef"
                :src="computedVagonUrl"
                class="pixelstreaming-iframe"
                frameborder="0"
@@ -63,6 +66,34 @@
                @load="handleIframeLoad"
                @error="handleIframeError"
             ></iframe>
+
+            <!-- Зрители видят видеопоток от хоста в том же стиле -->
+            <div v-else class="pixelstreaming-viewer-container">
+               <video
+                  v-if="remoteStream"
+                  ref="viewerVideo"
+                  class="pixelstreaming-iframe"
+                  autoplay
+                  playsinline
+                  muted
+               ></video>
+               <!-- Предупреждение, если хост еще не подключился или не начал трансляцию -->
+               <div v-else class="pixelstreaming-viewer-waiting">
+                  <div class="pixelstreaming-viewer-waiting-content">
+                     <div class="pixelstreaming-viewer-waiting-spinner"></div>
+                     <p class="pixelstreaming-viewer-waiting-text">
+                        <span v-if="adminUsers.length === 0">
+                           Ожидание подключения администратора...
+                        </span>
+                        <span v-else>
+                           Ожидание трансляции от администратора...
+                           <br />
+                           <strong>{{ adminUsers[0].name }}</strong>
+                        </span>
+                     </p>
+                  </div>
+               </div>
+            </div>
          </div>
          <div class="pixelstreaming-right-side">
             <div class="pixelstreaming-right-side-content">
@@ -208,6 +239,11 @@ const getRoomId = () => {
 // Синхронизированный URL для Vagon Stream (получается от сервера)
 const synchronizedVagonUrl = ref(null);
 
+// WebRTC для screen sharing (только для администратора)
+const localStream = ref(null);
+const remoteStream = ref(null);
+const isSharingScreen = ref(false);
+
 // Формируем URL для Vagon Streams
 // Используем синхронизированный URL, если он есть, иначе используем локальный
 const computedVagonUrl = computed(() => {
@@ -226,6 +262,16 @@ const computedVagonUrl = computed(() => {
 // Обработка загрузки iframe
 const handleIframeLoad = () => {
    console.log("✅ Vagon Stream iframe loaded successfully");
+
+   // Если мы администратор и еще не начали трансляцию, начинаем
+   if (isAdmin.value && !isSharingScreen.value && iframeRef.value) {
+      // Небольшая задержка для полной загрузки содержимого
+      setTimeout(() => {
+         if (!isSharingScreen.value) {
+            startScreenShare();
+         }
+      }, 1000);
+   }
 };
 
 // Обработка ошибок iframe
@@ -251,6 +297,22 @@ const handleUsersUpdate = (users) => {
    console.log("👥 Connected users list updated:", connectedUsers.value);
    console.log("👥 Displaying all users:", connectedUsers.value.length);
 
+   // Если мы администратор и есть новые зрители, создаем для них peer connections
+   if (isAdmin.value && localStream.value) {
+      const currentViewerIds = new Set(viewerConnections.keys());
+      const socketId = websocketService.socketInstance?.id;
+      const newViewers = users
+         .filter((user) => user.role !== "admin" && user.id !== socketId)
+         .filter((user) => !currentViewerIds.has(user.id));
+
+      newViewers.forEach((viewer) => {
+         createPeerConnectionForViewer(viewer.id, localStream.value);
+         console.log(
+            `📺 Creating peer connection for viewer: ${viewer.name} (${viewer.id})`
+         );
+      });
+   }
+
    // Если мы получили обновление пользователей, но еще не получили синхронизированный URL,
    // запрашиваем его (на случай, если автоматическая отправка не сработала)
    if (!synchronizedVagonUrl.value && users.length > 0) {
@@ -265,11 +327,65 @@ const handleUsersUpdate = (users) => {
    }
 };
 
+// Обработка WebRTC offer для зрителей
+const handleScreenShareOffer = async (data) => {
+   try {
+      const { offer, from } = data;
+
+      // Создаем peer connection
+      peerConnection = new RTCPeerConnection({
+         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+
+      // Обрабатываем получение потока
+      peerConnection.ontrack = (event) => {
+         console.log("📺 Received remote stream:", event.streams[0]);
+         remoteStream.value = event.streams[0];
+         if (viewerVideo.value) {
+            viewerVideo.value.srcObject = event.streams[0];
+         }
+      };
+
+      // Обрабатываем ICE candidates
+      peerConnection.onicecandidate = (event) => {
+         if (event.candidate) {
+            websocketService.sendIceCandidate({
+               roomId: getRoomId(),
+               candidate: event.candidate,
+               to: from,
+            });
+         }
+      };
+
+      // Устанавливаем remote description
+      await peerConnection.setRemoteDescription(
+         new RTCSessionDescription(offer)
+      );
+
+      // Создаем answer
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+
+      // Отправляем answer
+      websocketService.sendScreenShareAnswer({
+         roomId: getRoomId(),
+         answer: answer,
+         to: from,
+      });
+   } catch (error) {
+      console.error("❌ Error handling screen share offer:", error);
+   }
+};
+
 // Обработка получения синхронизированного Vagon Stream URL
 const handleStreamUrlUpdate = (streamUrl) => {
-   console.log("🎬 handleStreamUrlUpdate called with:", streamUrl);
-   console.log("🎬 Type:", typeof streamUrl);
    if (streamUrl && typeof streamUrl === "string") {
+      // Проверяем, не является ли это уже текущим URL (чтобы избежать лишних обновлений)
+      if (synchronizedVagonUrl.value === streamUrl) {
+         console.log("🎬 Received same synchronized URL, skipping update");
+         return;
+      }
+
       console.log("🎬 Received synchronized stream URL:", streamUrl);
       console.log("🎬 Current synchronized URL:", synchronizedVagonUrl.value);
       console.log("🎬 Will update iframe with new URL");
@@ -282,6 +398,170 @@ const handleStreamUrlUpdate = (streamUrl) => {
    } else {
       console.warn("⚠️ Received invalid stream URL update:", streamUrl);
    }
+};
+
+// WebRTC для screen sharing
+const viewerVideo = ref(null);
+let peerConnection = null;
+let dataChannel = null;
+
+// Ссылка на iframe для захвата
+const iframeRef = ref(null);
+
+// Автоматическое начало screen sharing для администратора
+// Захватываем только окно браузера с iframe
+const startScreenShare = async () => {
+   try {
+      // Используем getDisplayMedia с параметрами для автоматического выбора текущей вкладки
+      // preferCurrentTab пытается автоматически выбрать текущую вкладку
+      // В Chrome 94+ это может автоматически выбрать вкладку без диалога
+      const constraints = {
+         video: {
+            cursor: "never", // Скрываем курсор
+            displaySurface: "browser", // Только окно браузера
+         },
+         audio: false, // Отключаем аудио
+         preferCurrentTab: true, // Автоматически выбираем текущую вкладку (если поддерживается)
+      };
+
+      // Проверяем поддержку getDisplayMedia
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+         throw new Error("Screen sharing not supported in this browser");
+      }
+
+      console.log("📺 Requesting screen share with preferCurrentTab...");
+      const stream = await navigator.mediaDevices.getDisplayMedia(constraints);
+
+      localStream.value = stream;
+      isSharingScreen.value = true;
+
+      // Обрабатываем остановку трансляции пользователем
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+         videoTrack.addEventListener("ended", () => {
+            console.log("⏹️ Screen share track ended by user");
+            stopScreenShare();
+         });
+
+         // Проверяем, что захвачена именно вкладка браузера
+         const settings = videoTrack.getSettings();
+         console.log("📺 Video track settings:", settings);
+
+         if (settings.displaySurface !== "browser") {
+            console.warn(
+               "⚠️ Warning: Captured surface is not browser tab:",
+               settings.displaySurface
+            );
+         }
+      }
+
+      // Создаем RTCPeerConnection для каждого зрителя
+      setupPeerConnectionsForViewers(stream);
+
+      console.log(
+         "✅ Screen sharing started successfully (browser tab capture)"
+      );
+   } catch (error) {
+      console.error("❌ Error starting screen share:", error);
+      isSharingScreen.value = false;
+
+      // Если пользователь отменил или не дал разрешение
+      if (error.name === "NotAllowedError" || error.name === "AbortError") {
+         console.log("⚠️ Screen sharing was cancelled or denied by user");
+         // Не показываем alert, просто логируем
+      } else {
+         console.error("❌ Unexpected error:", error);
+      }
+   }
+};
+
+// Хранилище peer connections для каждого зрителя
+const viewerConnections = new Map();
+
+// Настройка peer connections для всех зрителей
+const setupPeerConnectionsForViewers = async (stream) => {
+   const roomId = getRoomId();
+
+   // Отправляем сигнал о начале трансляции
+   websocketService.sendScreenShareStart({
+      roomId: roomId,
+   });
+
+   // Подписываемся на ответы от зрителей
+   websocketService.onScreenShareAnswer(async (data) => {
+      const { answer, from } = data;
+      const connection = viewerConnections.get(from);
+      if (connection) {
+         await connection.setRemoteDescription(
+            new RTCSessionDescription(answer)
+         );
+         console.log(`📺 Answer received from ${from}`);
+      }
+   });
+
+   // Подписываемся на ICE candidates от зрителей
+   websocketService.onIceCandidate((data) => {
+      const { candidate, from } = data;
+      const connection = viewerConnections.get(from);
+      if (connection && candidate) {
+         connection.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+   });
+
+   console.log("📺 Setting up peer connections for viewers");
+};
+
+// Создание peer connection для нового зрителя
+const createPeerConnectionForViewer = async (viewerId, stream) => {
+   const connection = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+   });
+
+   // Добавляем треки в peer connection
+   stream.getTracks().forEach((track) => {
+      connection.addTrack(track, stream);
+   });
+
+   // Обрабатываем ICE candidates
+   connection.onicecandidate = (event) => {
+      if (event.candidate) {
+         websocketService.sendIceCandidate({
+            roomId: getRoomId(),
+            candidate: event.candidate,
+            to: viewerId,
+         });
+      }
+   };
+
+   viewerConnections.set(viewerId, connection);
+
+   // Создаем offer
+   const offer = await connection.createOffer();
+   await connection.setLocalDescription(offer);
+
+   // Отправляем offer зрителю
+   websocketService.sendScreenShareOffer({
+      roomId: getRoomId(),
+      offer: offer,
+      to: viewerId,
+   });
+
+   return connection;
+};
+
+// Остановка screen sharing
+const stopScreenShare = () => {
+   if (localStream.value) {
+      localStream.value.getTracks().forEach((track) => track.stop());
+      localStream.value = null;
+   }
+   if (peerConnection) {
+      peerConnection.close();
+      peerConnection = null;
+   }
+   isSharingScreen.value = false;
+   websocketService.sendScreenShareStop({ roomId: getRoomId() });
+   console.log("⏹️ Screen sharing stopped");
 };
 
 // Инициализация WebSocket при монтировании
@@ -314,6 +594,67 @@ onMounted(() => {
          // Здесь можно обрабатывать команды управления от администратора
          console.log("🎮 Control command received:", data);
       });
+
+      // Подписываемся на события screen sharing (для зрителей)
+      websocketService.onScreenShareStart(async (data) => {
+         console.log("📺 Screen share started by admin:", data);
+         // Зрители готовы принимать видеопоток
+         // Ждем offer от администратора
+      });
+
+      websocketService.onScreenShareOffer(async (data) => {
+         console.log("📺 Screen share offer received:", data);
+         // Обработка WebRTC offer от администратора
+         if (!isAdmin.value) {
+            await handleScreenShareOffer(data);
+         }
+      });
+
+      // Подписываемся на ICE candidates
+      websocketService.onIceCandidate((data) => {
+         const { candidate, from } = data;
+         if (peerConnection && candidate) {
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+         }
+      });
+
+      websocketService.onScreenShareStream((stream) => {
+         console.log("📺 Screen share stream received:", stream);
+         remoteStream.value = stream;
+         if (viewerVideo.value) {
+            viewerVideo.value.srcObject = stream;
+         }
+      });
+
+      // Автоматически начинаем screen sharing для администратора
+      // Используем событие загрузки iframe для более точного тайминга
+      if (isAdmin.value) {
+         // Ждем загрузки iframe перед началом трансляции
+         const startSharingAfterLoad = () => {
+            // Дополнительная задержка для полной загрузки содержимого iframe
+            setTimeout(() => {
+               if (!isSharingScreen.value) {
+                  startScreenShare();
+               }
+            }, 1000);
+         };
+
+         // Если iframe уже загружен, начинаем сразу
+         if (iframeRef.value && iframeRef.value.contentWindow) {
+            startSharingAfterLoad();
+         } else {
+            // Иначе ждем события load
+            const checkIframeLoad = setInterval(() => {
+               if (iframeRef.value && iframeRef.value.contentWindow) {
+                  clearInterval(checkIframeLoad);
+                  startSharingAfterLoad();
+               }
+            }, 100);
+
+            // Очищаем интервал через 10 секунд, если iframe не загрузился
+            setTimeout(() => clearInterval(checkIframeLoad), 10000);
+         }
+      }
       console.log("✅ Subscribed to control-command events");
 
       const roomId = getRoomId();
@@ -350,6 +691,7 @@ onMounted(() => {
 
 // Отключение при размонтировании
 onUnmounted(() => {
+   stopScreenShare();
    websocketService.leaveRoom();
    websocketService.removeAllListeners();
 });
@@ -597,5 +939,106 @@ onUnmounted(() => {
 
 .pixelstreaming-right-side-users::-webkit-scrollbar-thumb:hover {
    background: rgba(255, 255, 255, 0.5);
+}
+
+.pixelstreaming-viewer-message {
+   width: 100%;
+   height: 100%;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+   border-radius: 16px;
+   padding: 40px;
+}
+
+.pixelstreaming-viewer-message-content {
+   text-align: center;
+   color: #f2f2f2;
+   max-width: 500px;
+}
+
+.pixelstreaming-viewer-message-icon {
+   margin-bottom: 24px;
+   display: flex;
+   justify-content: center;
+   color: rgba(255, 255, 255, 0.9);
+}
+
+.pixelstreaming-viewer-message-title {
+   font-size: 28px;
+   font-weight: 600;
+   margin-bottom: 16px;
+   color: #ffffff;
+}
+
+.pixelstreaming-viewer-message-text {
+   font-size: 18px;
+   margin-bottom: 12px;
+   color: rgba(255, 255, 255, 0.9);
+   line-height: 1.6;
+}
+
+.pixelstreaming-viewer-message-text strong {
+   color: #ffffff;
+   font-weight: 600;
+}
+
+.pixelstreaming-viewer-message-hint {
+   font-size: 14px;
+   color: rgba(255, 255, 255, 0.7);
+   margin-top: 24px;
+   font-style: italic;
+}
+
+.pixelstreaming-viewer-container {
+   width: 100%;
+   height: 100%;
+   position: relative;
+   border-radius: 16px;
+   overflow: hidden;
+   background: #efefef;
+}
+
+.pixelstreaming-viewer-waiting {
+   width: 100%;
+   height: 100%;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   background: #efefef;
+   border-radius: 16px;
+}
+
+.pixelstreaming-viewer-waiting-content {
+   text-align: center;
+   color: #666;
+}
+
+.pixelstreaming-viewer-waiting-spinner {
+   width: 48px;
+   height: 48px;
+   border: 4px solid rgba(102, 126, 234, 0.2);
+   border-top-color: #667eea;
+   border-radius: 50%;
+   animation: spin 1s linear infinite;
+   margin: 0 auto 24px;
+}
+
+@keyframes spin {
+   to {
+      transform: rotate(360deg);
+   }
+}
+
+.pixelstreaming-viewer-waiting-text {
+   font-size: 16px;
+   color: #666;
+   line-height: 1.6;
+}
+
+.pixelstreaming-viewer-waiting-text strong {
+   color: #667eea;
+   font-weight: 600;
 }
 </style>

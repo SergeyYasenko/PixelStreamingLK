@@ -193,23 +193,36 @@ app.get("/api/proxy/streamers", async (req, res) => {
                   // Дополнительная проверка: читаем начало ответа, чтобы убедиться, что это не страница ошибки
                   try {
                      const text = await response.text();
-                     const hasPixelStreamingContent = text.includes("PixelStreaming") ||
-                        text.includes("UnrealEngine") ||
-                        text.includes("streaming") ||
-                        text.length > 1000; // Если страница большая, вероятно это не ошибка
 
-                     if (hasPixelStreamingContent) {
+                     // Более строгая проверка: ищем конкретные признаки Pixel Streaming
+                     const hasPixelStreamingContent =
+                        (text.includes("PixelStreaming") || text.includes("pixelstreaming")) &&
+                        (text.includes("UnrealEngine") || text.includes("WebRTC") || text.includes("streaming") || text.includes("webrtc"));
+
+                     // Также проверяем, что это не страница ошибки
+                     const isErrorPage = text.includes("GAVE UP WAITING") ||
+                        text.includes("404") ||
+                        text.includes("Not Found") ||
+                        text.includes("Error") ||
+                        text.length < 500; // Очень маленькие страницы - вероятно ошибка
+
+                     const isReallyAvailable = hasPixelStreamingContent && !isErrorPage && text.length > 1000;
+
+                     if (isReallyAvailable) {
                         availableStreamers.push(streamerId);
-                        console.log(`[Proxy] ✓ Streamer ${streamerId} is available and has content`);
+                        console.log(`[Proxy] ✓ Streamer ${streamerId} is available and has valid content`);
+                        console.log(`  - Text length: ${text.length}`);
+                        console.log(`  - Has PixelStreaming: ${text.includes("PixelStreaming") || text.includes("pixelstreaming")}`);
                      } else {
-                        console.log(`[Proxy] ✗ Streamer ${streamerId} returned HTML but no Pixel Streaming content`);
+                        console.log(`[Proxy] ✗ Streamer ${streamerId} returned HTML but:`);
+                        console.log(`  - Text length: ${text.length}`);
+                        console.log(`  - Has PixelStreaming: ${text.includes("PixelStreaming") || text.includes("pixelstreaming")}`);
+                        console.log(`  - Is error page: ${isErrorPage}`);
+                        console.log(`  - Not available`);
                      }
                   } catch (textError) {
-                     // Если не удалось прочитать текст, но статус OK, считаем доступным
-                     if (status >= 200 && status < 300) {
-                        availableStreamers.push(streamerId);
-                        console.log(`[Proxy] ✓ Streamer ${streamerId} is available (status OK, couldn't read content)`);
-                     }
+                     console.log(`[Proxy] ✗ Streamer ${streamerId}: Error reading text: ${textError.message}`);
+                     // Если не удалось прочитать текст, считаем недоступным
                   }
                } else {
                   console.log(`[Proxy] ✗ Streamer ${streamerId} returned status ${status} or wrong content type`);
@@ -318,29 +331,37 @@ app.get("/api/proxy/check-streamer", async (req, res) => {
             // Дополнительная проверка: читаем начало ответа, чтобы убедиться, что это не страница ошибки
             try {
                const text = await response.text();
-               const hasPixelStreamingContent = text.includes("PixelStreaming") ||
-                  text.includes("UnrealEngine") ||
-                  text.includes("streaming") ||
-                  text.includes("WebRTC") ||
-                  text.length > 1000; // Если страница большая, вероятно это не ошибка
 
-               const isAvailable = hasPixelStreamingContent;
+               // Более строгая проверка: ищем конкретные признаки Pixel Streaming
+               const hasPixelStreamingContent =
+                  (text.includes("PixelStreaming") || text.includes("pixelstreaming")) &&
+                  (text.includes("UnrealEngine") || text.includes("WebRTC") || text.includes("streaming") || text.includes("webrtc"));
 
-               console.log(`[Check Streamer] ${streamerId}: hasContent=${hasPixelStreamingContent}, textLength=${text.length}, available=${isAvailable}`);
+               // Также проверяем, что это не страница ошибки
+               const isErrorPage = text.includes("GAVE UP WAITING") ||
+                  text.includes("404") ||
+                  text.includes("Not Found") ||
+                  text.includes("Error") ||
+                  text.length < 500; // Очень маленькие страницы - вероятно ошибка
+
+               const isAvailable = hasPixelStreamingContent && !isErrorPage && text.length > 1000;
+
+               console.log(`[Check Streamer] ${streamerId}:`);
+               console.log(`  - Status: ${status}, ContentType: ${contentType}`);
+               console.log(`  - Text length: ${text.length}`);
+               console.log(`  - Has PixelStreaming: ${text.includes("PixelStreaming") || text.includes("pixelstreaming")}`);
+               console.log(`  - Has UnrealEngine/WebRTC: ${text.includes("UnrealEngine") || text.includes("WebRTC") || text.includes("streaming")}`);
+               console.log(`  - Is error page: ${isErrorPage}`);
+               console.log(`  - Available: ${isAvailable}`);
 
                res.json({ available: isAvailable });
             } catch (textError) {
-               // Если не удалось прочитать текст, но статус OK, считаем доступным
-               if (status >= 200 && status < 300) {
-                  console.log(`[Check Streamer] ${streamerId}: status OK, couldn't read content, assuming available`);
-                  res.json({ available: true });
-               } else {
-                  console.log(`[Check Streamer] ${streamerId}: status not OK, not available`);
-                  res.json({ available: false });
-               }
+               console.log(`[Check Streamer] ${streamerId}: Error reading text: ${textError.message}`);
+               // Если не удалось прочитать текст, считаем недоступным
+               res.json({ available: false });
             }
          } else {
-            console.log(`[Check Streamer] ${streamerId}: status=${status} or wrong contentType, not available`);
+            console.log(`[Check Streamer] ${streamerId}: status=${status} or wrong contentType=${contentType}, not available`);
             res.json({ available: false });
          }
       } catch (fetchError) {

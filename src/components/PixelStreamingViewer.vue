@@ -104,10 +104,11 @@ const getStreamServerUrl = () => {
    const streamerId = props.streamerId || "DefaultStreamer";
 
    // Параметры для Pixel Streaming
+   // Pixel Streaming читает параметры из URL при загрузке страницы
    const params = new URLSearchParams({
       StreamerId: streamerId,
       UseMicrophone: "true",
-      UseWebcam: "true", // Веб-камера по умолчанию выключена
+      UseWebcam: "true",
       StartVideoMuted: "false",
       AutoConnect: "false",
       LightMode: "false",
@@ -139,10 +140,55 @@ const computedStreamUrl = computed(() => {
    if (synchronizedStreamUrl.value) {
       return synchronizedStreamUrl.value;
    }
-   return getStreamServerUrl();
+   const url = getStreamServerUrl();
+   // Логируем URL для отладки
+   console.log("Pixel Streaming URL:", url);
+   return url;
 });
 
-const handleIframeLoad = () => {};
+const handleIframeLoad = () => {
+   // После загрузки iframe пытаемся включить микрофон и камеру
+   // Pixel Streaming может требовать задержку перед отправкой команд
+   setTimeout(() => {
+      if (iframeRef.value && iframeRef.value.contentWindow) {
+         try {
+            const iframeDoc =
+               iframeRef.value.contentDocument ||
+               iframeRef.value.contentWindow.document;
+
+            // Пытаемся найти переключатели микрофона и камеры в настройках и включить их
+            const useMicrophoneToggle = iframeDoc.querySelector(
+               'input[type="checkbox"][id*="microphone"], input[type="checkbox"][id*="Microphone"]'
+            );
+            const useWebcamToggle = iframeDoc.querySelector(
+               'input[type="checkbox"][id*="webcam"], input[type="checkbox"][id*="Webcam"]'
+            );
+
+            if (useMicrophoneToggle && !useMicrophoneToggle.checked) {
+               useMicrophoneToggle.click();
+            }
+
+            if (useWebcamToggle && !useWebcamToggle.checked) {
+               useWebcamToggle.click();
+            }
+
+            // Также отправляем команды через postMessage на случай, если Pixel Streaming поддерживает это
+            iframeRef.value.contentWindow.postMessage(
+               {
+                  UseMicrophone: true,
+                  UseWebcam: true,
+               },
+               "*"
+            );
+         } catch (error) {
+            // Если не удалось получить доступ к документу iframe (CORS), просто логируем
+            console.log(
+               "Cannot access iframe document (CORS), parameters should be set via URL"
+            );
+         }
+      }
+   }, 2000); // Увеличиваем задержку, чтобы Pixel Streaming успел загрузиться
+};
 
 const handleIframeError = () => {};
 

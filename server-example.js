@@ -38,6 +38,11 @@ app.get("/health", (req, res) => {
 // Прокси для получения списка streamers от Pixel Streaming сервера
 // Это обходит CORS ограничения
 app.get("/api/proxy/streamers", async (req, res) => {
+   // Отключаем кеширование для этого endpoint
+   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+   res.setHeader("Pragma", "no-cache");
+   res.setHeader("Expires", "0");
+
    try {
       // Используем тот же хост, что и у запроса, но порт 80 для Pixel Streaming
       const streamServerHost = req.get("host")?.split(":")[0] || req.hostname || "localhost";

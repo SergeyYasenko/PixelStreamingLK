@@ -156,10 +156,14 @@ const fetchAvailableRooms = async () => {
       const proxyEndpoint = `${wsServerUrl}/api/proxy/streamers`;
 
       try {
-         const response = await fetch(proxyEndpoint, {
+         // Добавляем timestamp для предотвращения кеширования
+         const cacheBuster = `?t=${Date.now()}`;
+         const response = await fetch(`${proxyEndpoint}${cacheBuster}`, {
             method: "GET",
             headers: {
                "Content-Type": "application/json",
+               "Cache-Control": "no-cache",
+               Pragma: "no-cache",
             },
          });
 

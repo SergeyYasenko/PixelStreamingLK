@@ -167,22 +167,52 @@ app.get("/api/proxy/streamers", async (req, res) => {
             console.log(`[Proxy] Checking streamer: ${streamerUrl}`);
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 2000);
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
 
             try {
+               // Используем GET вместо HEAD для более надежной проверки
                const response = await fetch(streamerUrl, {
-                  method: "HEAD",
+                  method: "GET",
                   signal: controller.signal,
+                  headers: {
+                     "User-Agent": "Mozilla/5.0 (compatible; StreamChecker/1.0)",
+                  },
                });
                clearTimeout(timeoutId);
 
-               console.log(`[Proxy] Streamer ${streamerId} response status: ${response.status}`);
+               const status = response.status;
+               const contentType = response.headers.get("content-type") || "";
 
-               if (response.ok || response.status < 500) {
-                  availableStreamers.push(streamerId);
-                  console.log(`[Proxy] ✓ Streamer ${streamerId} is available`);
+               console.log(`[Proxy] Streamer ${streamerId} response status: ${status}, contentType: ${contentType}`);
+
+               // Проверяем, что ответ успешный и это HTML страница (Pixel Streaming возвращает HTML)
+               const isAvailable = (status >= 200 && status < 400) &&
+                  (contentType.includes("text/html") || contentType.includes("text/plain"));
+
+               if (isAvailable) {
+                  // Дополнительная проверка: читаем начало ответа, чтобы убедиться, что это не страница ошибки
+                  try {
+                     const text = await response.text();
+                     const hasPixelStreamingContent = text.includes("PixelStreaming") ||
+                        text.includes("UnrealEngine") ||
+                        text.includes("streaming") ||
+                        text.length > 1000; // Если страница большая, вероятно это не ошибка
+
+                     if (hasPixelStreamingContent) {
+                        availableStreamers.push(streamerId);
+                        console.log(`[Proxy] ✓ Streamer ${streamerId} is available and has content`);
+                     } else {
+                        console.log(`[Proxy] ✗ Streamer ${streamerId} returned HTML but no Pixel Streaming content`);
+                     }
+                  } catch (textError) {
+                     // Если не удалось прочитать текст, но статус OK, считаем доступным
+                     if (status >= 200 && status < 300) {
+                        availableStreamers.push(streamerId);
+                        console.log(`[Proxy] ✓ Streamer ${streamerId} is available (status OK, couldn't read content)`);
+                     }
+                  }
                } else {
-                  console.log(`[Proxy] ✗ Streamer ${streamerId} returned status ${response.status}`);
+                  console.log(`[Proxy] ✗ Streamer ${streamerId} returned status ${status} or wrong content type`);
                }
             } catch (fetchError) {
                clearTimeout(timeoutId);
@@ -281,16 +311,41 @@ app.get("/api/proxy/check-streamer", async (req, res) => {
          const status = response.status;
          const contentType = response.headers.get("content-type") || "";
 
-         // Проверяем, что ответ успешный и это HTML страница (Pixel Streaming возвращает HTML)
-         const isAvailable = (status >= 200 && status < 400) &&
-            (contentType.includes("text/html") || contentType.includes("text/plain"));
+         console.log(`[Check Streamer] ${streamerId}: status=${status}, contentType=${contentType}`);
 
-         console.log(`[Check Streamer] ${streamerId}: status=${status}, contentType=${contentType}, available=${isAvailable}`);
+         // Проверяем, что ответ успешный и это HTML страница
+         if (status >= 200 && status < 400 && (contentType.includes("text/html") || contentType.includes("text/plain"))) {
+            // Дополнительная проверка: читаем начало ответа, чтобы убедиться, что это не страница ошибки
+            try {
+               const text = await response.text();
+               const hasPixelStreamingContent = text.includes("PixelStreaming") ||
+                  text.includes("UnrealEngine") ||
+                  text.includes("streaming") ||
+                  text.includes("WebRTC") ||
+                  text.length > 1000; // Если страница большая, вероятно это не ошибка
 
-         res.json({ available: isAvailable });
+               const isAvailable = hasPixelStreamingContent;
+
+               console.log(`[Check Streamer] ${streamerId}: hasContent=${hasPixelStreamingContent}, textLength=${text.length}, available=${isAvailable}`);
+
+               res.json({ available: isAvailable });
+            } catch (textError) {
+               // Если не удалось прочитать текст, но статус OK, считаем доступным
+               if (status >= 200 && status < 300) {
+                  console.log(`[Check Streamer] ${streamerId}: status OK, couldn't read content, assuming available`);
+                  res.json({ available: true });
+               } else {
+                  console.log(`[Check Streamer] ${streamerId}: status not OK, not available`);
+                  res.json({ available: false });
+               }
+            }
+         } else {
+            console.log(`[Check Streamer] ${streamerId}: status=${status} or wrong contentType, not available`);
+            res.json({ available: false });
+         }
       } catch (fetchError) {
          clearTimeout(timeoutId);
-         console.log(`[Check Streamer] ${streamerId}: error=${fetchError.message}`);
+         console.log(`[Check Streamer] ${streamerId}: error=${fetchError.message}, not available`);
          res.json({ available: false });
       }
    } catch (error) {

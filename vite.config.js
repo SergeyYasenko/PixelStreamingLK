@@ -21,7 +21,9 @@ export default defineConfig({
          '.ngrok-free.dev', // На случай использования ngrok (новый домен)
       ],
       hmr: {
-         clientPort: 443, // Для HTTPS туннелей
+         protocol: 'ws',
+         host: 'localhost',
+         port: 5173,
       }
    }
 })

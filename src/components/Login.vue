@@ -225,6 +225,7 @@ const fetchAvailableRooms = async () => {
          }
       } catch (proxyError) {
          // Если прокси недоступен, список остается пустым
+         console.error("Error fetching streamers:", proxyError);
          streamerError.value = true;
       }
 
@@ -232,9 +233,15 @@ const fetchAvailableRooms = async () => {
       // НЕ используем дефолтные значения - только реальные данные от сервера
       if (availableRooms.value.length === 0) {
          streamerError.value = true;
+      } else {
+         // Если есть доступные комнаты, выбираем первую по умолчанию
+         if (!selectedStreamerId.value && availableRooms.value.length > 0) {
+            selectedStreamerId.value = availableRooms.value[0].streamerId;
+         }
       }
    } catch (error) {
       // В случае ошибки список остается пустым
+      console.error("Error in fetchAvailableRooms:", error);
       availableRooms.value = [];
       streamerError.value = true;
    } finally {

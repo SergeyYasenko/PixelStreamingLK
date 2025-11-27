@@ -49,6 +49,8 @@ app.get("/api/proxy/streamers", async (req, res) => {
             ? `${protocol}://${streamServerHost}`
             : `${protocol}://${streamServerHost}:${streamServerPort}`;
 
+      console.log(`[Proxy] Attempting to fetch streamers from: ${streamServerUrl}`);
+
       const possibleEndpoints = [
          "/api/streamers",
          "/streamers",
@@ -60,15 +62,22 @@ app.get("/api/proxy/streamers", async (req, res) => {
 
       for (const endpoint of possibleEndpoints) {
          try {
-            const response = await fetch(`${streamServerUrl}${endpoint}`, {
+            const fullUrl = `${streamServerUrl}${endpoint}`;
+            console.log(`[Proxy] Trying endpoint: ${fullUrl}`);
+
+            const response = await fetch(fullUrl, {
                method: "GET",
                headers: {
                   "Content-Type": "application/json",
                },
             });
 
+            console.log(`[Proxy] Response status: ${response.status} for ${fullUrl}`);
+
             if (response.ok) {
                const data = await response.json();
+               console.log(`[Proxy] Response data:`, data);
+
                let streamersList = null;
 
                if (Array.isArray(data)) {
@@ -82,19 +91,66 @@ app.get("/api/proxy/streamers", async (req, res) => {
                }
 
                if (streamersList && streamersList.length > 0) {
+                  console.log(`[Proxy] Found ${streamersList.length} streamers`);
                   return res.json(streamersList);
                }
             }
          } catch (error) {
+            console.log(`[Proxy] Error for endpoint ${endpoint}:`, error.message);
             // Продолжаем пробовать другие endpoints
             continue;
          }
       }
 
+      // Если API не предоставляет список, пробуем проверить доступность через прямые запросы
+      // Используем список возможных StreamerId для проверки
+      console.log(`[Proxy] No API endpoints worked, trying direct streamer checks`);
+      const possibleStreamerIds = [
+         "DefaultStreamer",
+         "Streamer1",
+         "Streamer2",
+         "Streamer3",
+      ];
+
+      const availableStreamers = [];
+
+      for (const streamerId of possibleStreamerIds) {
+         try {
+            const streamerUrl = `${streamServerUrl}/?StreamerId=${streamerId}`;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 1000);
+
+            try {
+               const response = await fetch(streamerUrl, {
+                  method: "HEAD",
+                  signal: controller.signal,
+               });
+               clearTimeout(timeoutId);
+
+               if (response.ok || response.status < 500) {
+                  availableStreamers.push(streamerId);
+                  console.log(`[Proxy] Streamer ${streamerId} is available`);
+               }
+            } catch (fetchError) {
+               clearTimeout(timeoutId);
+               // Игнорируем ошибки для недоступных streamers
+            }
+         } catch (error) {
+            // Игнорируем ошибки
+         }
+      }
+
+      if (availableStreamers.length > 0) {
+         console.log(`[Proxy] Found ${availableStreamers.length} available streamers via direct check`);
+         return res.json(availableStreamers);
+      }
+
       // Если ни один endpoint не сработал, возвращаем пустой массив
+      console.log(`[Proxy] No streamers found, returning empty array`);
       res.json([]);
    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch streamers" });
+      console.error(`[Proxy] Error:`, error);
+      res.status(500).json({ error: "Failed to fetch streamers", message: error.message });
    }
 });
 

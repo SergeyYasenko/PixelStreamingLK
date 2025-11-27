@@ -102,14 +102,25 @@ const getStreamServerUrl = () => {
    const port = import.meta.env.VITE_STREAM_PORT || "80";
    const protocol = window.location.protocol === "https:" ? "https:" : "http:";
    const streamerId = props.streamerId || "DefaultStreamer";
+
+   // Параметры для Pixel Streaming
+   const params = new URLSearchParams({
+      StreamerId: streamerId,
+      UseMicrophone: "true",
+      UseWebcam: "true", // Веб-камера по умолчанию выключена
+      StartVideoMuted: "false",
+      AutoConnect: "false",
+      LightMode: "false",
+   });
+
    // Если порт 80, не добавляем его в URL (стандартный HTTP порт)
    if (port === "80" && protocol === "http:") {
-      return `${protocol}//${host}/?StreamerId=${streamerId}`;
+      return `${protocol}//${host}/?${params.toString()}`;
    }
    if (port === "443" && protocol === "https:") {
-      return `${protocol}//${host}/?StreamerId=${streamerId}`;
+      return `${protocol}//${host}/?${params.toString()}`;
    }
-   return `${protocol}//${host}:${port}/?StreamerId=${streamerId}`;
+   return `${protocol}//${host}:${port}/?${params.toString()}`;
 };
 
 const getWebSocketServerUrl = () => {

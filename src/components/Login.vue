@@ -379,6 +379,7 @@ const handleLogin = () => {
 
 .select-wrapper.is-open::after {
    transform: translateY(-50%) rotate(225deg);
+
    transition: transform 0.3s ease;
 }
 

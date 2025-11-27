@@ -105,19 +105,10 @@ const getStreamServerUrl = () => {
 
    // Параметры для Pixel Streaming
    // Pixel Streaming читает параметры из URL при загрузке страницы
-   // Пробуем разные варианты названий параметров
    const params = new URLSearchParams({
       StreamerId: streamerId,
-      // Варианты для микрофона
       UseMicrophone: "true",
-      useMicrophone: "true",
-      UseMic: "true",
-      useMic: "true",
-      // Варианты для веб-камеры
       UseWebcam: "true",
-      useWebcam: "true",
-      UseCamera: "true",
-      useCamera: "true",
       StartVideoMuted: "false",
       AutoConnect: "false",
       LightMode: "false",
@@ -228,7 +219,30 @@ const handleStreamUrlUpdate = (streamUrl) => {
 
 onMounted(() => {
    // Запрашиваем разрешения на микрофон и камеру заранее
+   // ВАЖНО: Работает только на HTTPS или localhost
    const requestMediaPermissions = async () => {
+      // Проверяем доступность mediaDevices API
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+         console.warn(
+            "MediaDevices API not available. Microphone and webcam will not work on HTTP (only HTTPS or localhost)"
+         );
+         return;
+      }
+
+      // Проверяем, что мы на HTTPS или localhost
+      const isSecure =
+         window.location.protocol === "https:" ||
+         window.location.hostname === "localhost" ||
+         window.location.hostname === "127.0.0.1";
+
+      if (!isSecure) {
+         console.warn(
+            "Microphone and webcam require HTTPS or localhost. Current protocol:",
+            window.location.protocol
+         );
+         return;
+      }
+
       try {
          // Запрашиваем доступ к микрофону и камере
          const stream = await navigator.mediaDevices.getUserMedia({
@@ -243,7 +257,7 @@ onMounted(() => {
       }
    };
 
-   // Запрашиваем разрешения при монтировании компонента
+   // Запрашиваем разрешения при монтировании компонента (только на HTTPS/localhost)
    requestMediaPermissions();
 
    const wsServerUrl = getWebSocketServerUrl();

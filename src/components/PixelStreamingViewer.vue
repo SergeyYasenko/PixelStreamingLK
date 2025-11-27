@@ -55,29 +55,63 @@
          </div>
          <div class="pixelstreaming-wrapper">
             <iframe
-               :src="computedStreamUrl"
+               :src="computedVagonUrl"
                class="pixelstreaming-iframe"
                frameborder="0"
                scrolling="no"
-               allow="autoplay; fullscreen; microphone; camera"
+               allow="autoplay; fullscreen; microphone; camera; gamepad"
+               @load="handleIframeLoad"
+               @error="handleIframeError"
             ></iframe>
          </div>
          <div class="pixelstreaming-right-side">
             <div class="pixelstreaming-right-side-content">
-               <div class="pixelstreaming-right-side-role">
-                  <span>{{ getRoleLabel() }}</span>
-               </div>
                <div class="pixelstreaming-right-side-users">
+                  <!-- Администраторы -->
                   <div
-                     v-for="(user, index) in connectedUsers"
-                     :key="index"
-                     class="pixelstreaming-right-side-user"
+                     v-if="adminUsers.length > 0"
+                     class="pixelstreaming-right-side-users-group"
                   >
-                     <div class="pixelstreaming-right-side-user-icon">
-                        <img src="@/assets/icons/avatar.png" alt="User" />
+                     <div class="pixelstreaming-right-side-users-group-title">
+                        <span>Администратор</span>
                      </div>
-                     <div class="pixelstreaming-right-side-user-name">
-                        <span>{{ user.name }}</span>
+                     <div
+                        v-for="user in adminUsers"
+                        :key="user.id"
+                        class="pixelstreaming-right-side-user"
+                     >
+                        <div class="pixelstreaming-right-side-user-icon">
+                           <img src="@/assets/icons/avatar.png" alt="User" />
+                        </div>
+                        <div class="pixelstreaming-right-side-user-info">
+                           <div class="pixelstreaming-right-side-user-name">
+                              <span>{{ user.name }}</span>
+                           </div>
+                        </div>
+                     </div>
+                  </div>
+
+                  <!-- Наблюдатели -->
+                  <div
+                     v-if="viewerUsers.length > 0"
+                     class="pixelstreaming-right-side-users-group"
+                  >
+                     <div class="pixelstreaming-right-side-users-group-title">
+                        <span>Наблюдатель</span>
+                     </div>
+                     <div
+                        v-for="user in viewerUsers"
+                        :key="user.id"
+                        class="pixelstreaming-right-side-user"
+                     >
+                        <div class="pixelstreaming-right-side-user-icon">
+                           <img src="@/assets/icons/avatar.png" alt="User" />
+                        </div>
+                        <div class="pixelstreaming-right-side-user-info">
+                           <div class="pixelstreaming-right-side-user-name">
+                              <span>{{ user.name }}</span>
+                           </div>
+                        </div>
                      </div>
                   </div>
                </div>
@@ -90,11 +124,13 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import websocketService from "@/services/websocket";
+import { getVagonStreamUrl } from "@/services/vagon";
 
 const props = defineProps({
+   // Vagon Stream Link или Stream ID
    streamUrl: {
       type: String,
-      default: "https://share.streampixel.io/692201c94a9ae9b3794166b7",
+      default: "",
    },
    userName: {
       type: String,
@@ -114,7 +150,16 @@ const props = defineProps({
 const connectedUsers = ref([]);
 const isAdmin = computed(() => props.role === "admin");
 
-// Получаем название роли
+// Группируем пользователей по ролям
+const adminUsers = computed(() => {
+   return connectedUsers.value.filter((user) => user.role === "admin");
+});
+
+const viewerUsers = computed(() => {
+   return connectedUsers.value.filter((user) => user.role === "viewer");
+});
+
+// Получаем название роли для текущего пользователя
 const getRoleLabel = () => {
    const roleLabels = {
       admin: "Администратор",
@@ -123,48 +168,120 @@ const getRoleLabel = () => {
    return roleLabels[props.role] || props.role || "Роль";
 };
 
-// Генерируем ID комнаты на основе projectUrl
+// Генерируем ID комнаты на основе нормализованного streamUrl
+// ВАЖНО: Все пользователи с одним streamUrl должны попадать в одну комнату
+// Используем нормализованный streamUrl, чтобы гарантировать одинаковый roomId
 const getRoomId = () => {
-   if (props.projectUrl) {
-      // Используем projectUrl как идентификатор комнаты
-      return btoa(props.projectUrl).replace(/[+/=]/g, "");
+   // Сначала получаем нормализованный streamUrl через getVagonStreamUrl
+   const streamUrl = getVagonStreamUrl(props.projectUrl);
+
+   if (streamUrl) {
+      // Извлекаем UUID из нормализованного streamUrl
+      // Формат: https://streams.vagon.io/streams/{UUID}
+      const uuidMatch = streamUrl.match(
+         /streams\.vagon\.io\/streams\/([a-f0-9-]+)/i
+      );
+
+      if (uuidMatch) {
+         const streamUuid = uuidMatch[1].toLowerCase().trim();
+         // Используем UUID напрямую для генерации roomId
+         // Это гарантирует, что все пользователи с одним UUID попадут в одну комнату
+         const roomId = `room-${streamUuid}`;
+         console.log("🏠 Room ID generated from stream UUID:", roomId);
+         console.log("🏠 Original projectUrl:", props.projectUrl);
+         console.log("🏠 Normalized streamUrl:", streamUrl);
+         console.log("🏠 Extracted UUID:", streamUuid);
+         return roomId;
+      }
+
+      // Если не удалось извлечь UUID, используем хеш от streamUrl
+      const roomId = btoa(streamUrl).replace(/[+/=]/g, "");
+      console.log("🏠 Room ID generated from streamUrl hash:", roomId);
+      console.log("🏠 StreamUrl:", streamUrl);
+      return roomId;
    }
+
+   console.log("🏠 Using default room (no projectUrl)");
    return "default-room";
 };
 
-// Формируем URL с параметрами для отправки данных
-const computedStreamUrl = computed(() => {
-   const baseUrl = props.streamUrl;
-   const params = new URLSearchParams();
+// Синхронизированный URL для Vagon Stream (получается от сервера)
+const synchronizedVagonUrl = ref(null);
 
-   if (props.userName) {
-      params.append("name", props.userName);
+// Формируем URL для Vagon Streams
+// Используем синхронизированный URL, если он есть, иначе используем локальный
+const computedVagonUrl = computed(() => {
+   if (synchronizedVagonUrl.value) {
+      console.log(
+         "🎬 Using synchronized Vagon URL:",
+         synchronizedVagonUrl.value
+      );
+      return synchronizedVagonUrl.value;
    }
-   if (props.projectUrl) {
-      params.append("projectUrl", props.projectUrl);
-   }
-   if (props.role) {
-      params.append("role", props.role);
-   }
-
-   // Для зрителей добавляем read-only режим
-   if (!isAdmin.value) {
-      params.append("readonly", "true");
-   }
-
-   const queryString = params.toString();
-   return queryString ? `${baseUrl}?${queryString}` : baseUrl;
+   const localUrl = getVagonStreamUrl(props.projectUrl);
+   console.log("🎬 Using local Vagon URL:", localUrl);
+   return localUrl;
 });
+
+// Обработка загрузки iframe
+const handleIframeLoad = () => {
+   console.log("✅ Vagon Stream iframe loaded successfully");
+};
+
+// Обработка ошибок iframe
+const handleIframeError = (event) => {
+   console.error("❌ Vagon Stream iframe error:", event);
+   console.error("Stream URL:", computedVagonUrl.value);
+   console.error("User role:", props.role);
+};
 
 // Обработка обновления списка пользователей
 const handleUsersUpdate = (users) => {
    console.log("👥 Users update received:", users);
+   console.log("👥 Total users in room:", users.length);
+   console.log("👥 Current user role:", props.role);
+
+   // Отображаем ВСЕХ пользователей независимо от роли
    connectedUsers.value = users.map((user) => ({
       name: user.name,
       role: user.role,
       id: user.id,
    }));
+
    console.log("👥 Connected users list updated:", connectedUsers.value);
+   console.log("👥 Displaying all users:", connectedUsers.value.length);
+
+   // Если мы получили обновление пользователей, но еще не получили синхронизированный URL,
+   // запрашиваем его (на случай, если автоматическая отправка не сработала)
+   if (!synchronizedVagonUrl.value && users.length > 0) {
+      console.log(
+         "⏰ Received users update but no synchronized URL yet, requesting..."
+      );
+      setTimeout(() => {
+         if (!synchronizedVagonUrl.value) {
+            websocketService.requestStreamUrl();
+         }
+      }, 300);
+   }
+};
+
+// Обработка получения синхронизированного Vagon Stream URL
+const handleStreamUrlUpdate = (streamUrl) => {
+   console.log("🎬 handleStreamUrlUpdate called with:", streamUrl);
+   console.log("🎬 Type:", typeof streamUrl);
+   if (streamUrl && typeof streamUrl === "string") {
+      console.log("🎬 Received synchronized stream URL:", streamUrl);
+      console.log("🎬 Current synchronized URL:", synchronizedVagonUrl.value);
+      console.log("🎬 Will update iframe with new URL");
+      synchronizedVagonUrl.value = streamUrl;
+      console.log(
+         "🎬 Updated synchronizedVagonUrl.value to:",
+         synchronizedVagonUrl.value
+      );
+      // Vue автоматически обновит iframe через computed property computedVagonUrl
+   } else {
+      console.warn("⚠️ Received invalid stream URL update:", streamUrl);
+   }
 };
 
 // Инициализация WebSocket при монтировании
@@ -179,23 +296,49 @@ onMounted(() => {
 
    // Ждем подключения перед присоединением к комнате
    const joinRoomAfterConnect = () => {
-      const roomId = getRoomId();
-      console.log("📝 Joining room:", roomId);
-      console.log("👤 User data:", { name: props.userName, role: props.role });
+      // ВАЖНО: Подписываемся на события ДО присоединения к комнате
+      // чтобы не пропустить события, которые сервер отправляет сразу после join-room
 
-      websocketService.joinRoom(roomId, {
-         name: props.userName,
-         role: props.role,
-      });
+      console.log("🔔 Setting up event listeners before joining room...");
 
       // Подписываемся на обновления пользователей
       websocketService.onUsersUpdate(handleUsersUpdate);
+      console.log("✅ Subscribed to users-update events");
+
+      // Подписываемся на обновления синхронизированного Stream URL
+      websocketService.onStreamUrlUpdate(handleStreamUrlUpdate);
+      console.log("✅ Subscribed to stream-url-update events");
 
       // Подписываемся на команды управления (для синхронизации)
       websocketService.onControlCommand((data) => {
          // Здесь можно обрабатывать команды управления от администратора
          console.log("🎮 Control command received:", data);
       });
+      console.log("✅ Subscribed to control-command events");
+
+      const roomId = getRoomId();
+      const localStreamUrl = getVagonStreamUrl(props.projectUrl);
+      console.log("📝 Joining room:", roomId);
+      console.log("👤 User data:", { name: props.userName, role: props.role });
+      console.log("🎬 Local stream URL:", localStreamUrl);
+
+      websocketService.joinRoom(roomId, {
+         name: props.userName,
+         role: props.role,
+         streamUrl: localStreamUrl, // Отправляем локальный URL при подключении
+      });
+
+      console.log("📤 join-room event sent, waiting for server response...");
+
+      // Запрашиваем синхронизированный URL через небольшую задержку, если не получили автоматически
+      setTimeout(() => {
+         if (!synchronizedVagonUrl.value) {
+            console.log(
+               "⏰ No synchronized URL received, requesting from server..."
+            );
+            websocketService.requestStreamUrl();
+         }
+      }, 500); // Запрашиваем через 500ms, если не получили автоматически
    };
 
    if (socket && socket.connected) {
@@ -366,7 +509,21 @@ onUnmounted(() => {
    gap: 20px;
 }
 
-.pixelstreaming-right-side-role {
+.pixelstreaming-right-side-users {
+   display: flex;
+   flex-direction: column;
+   gap: 24px;
+   max-height: calc(100vh - 200px);
+   overflow-y: auto;
+}
+
+.pixelstreaming-right-side-users-group {
+   display: flex;
+   flex-direction: column;
+   gap: 8px;
+}
+
+.pixelstreaming-right-side-users-group-title {
    font-size: 24px;
    font-weight: 600;
    color: #f2f2f2;
@@ -375,14 +532,6 @@ onUnmounted(() => {
    background: rgba(0, 0, 0, 0.3);
    backdrop-filter: blur(10px);
    border-radius: 16px;
-}
-
-.pixelstreaming-right-side-users {
-   display: flex;
-   flex-direction: column;
-   gap: 16px;
-   max-height: calc(100vh - 200px);
-   overflow-y: auto;
 }
 
 .pixelstreaming-right-side-user {
@@ -414,10 +563,22 @@ onUnmounted(() => {
    object-fit: cover;
 }
 
+.pixelstreaming-right-side-user-info {
+   display: flex;
+   flex-direction: column;
+   gap: 4px;
+   flex: 1;
+}
+
 .pixelstreaming-right-side-user-name {
    font-size: 18px;
    color: #f2f2f2;
-   flex: 1;
+   font-weight: 500;
+}
+
+.pixelstreaming-right-side-user-role {
+   font-size: 12px;
+   color: rgba(242, 242, 242, 0.7);
 }
 
 .pixelstreaming-right-side-users::-webkit-scrollbar {

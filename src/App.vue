@@ -21,10 +21,7 @@ const handleLoginSuccess = (data) => {
       <Login v-if="!isLoggedIn" @login-success="handleLoginSuccess" />
       <PixelStreamingViewer
          v-else
-         :stream-url="
-            userData.projectUrl ||
-            'https://share.streampixel.io/692201c94a9ae9b3794166b7'
-         "
+         :stream-url="userData.projectUrl || ''"
          :user-name="userData.name"
          :project-url="userData.projectUrl"
          :role="userData.role"

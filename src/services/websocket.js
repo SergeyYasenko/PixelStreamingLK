@@ -66,6 +66,7 @@ class WebSocketService {
          console.error("❌ Socket not connected, waiting for connection...");
          this.socket.once("connect", () => {
             this.roomId = roomId;
+            console.log("💾 Room ID saved:", this.roomId);
             this.socket.emit("join-room", {
                roomId,
                user: {
@@ -73,6 +74,7 @@ class WebSocketService {
                   role: userData.role,
                   id: this.socket.id,
                },
+               streamUrl: userData.streamUrl, // Отправляем Stream URL
             });
             console.log("✅ Joined room:", roomId);
          });
@@ -80,6 +82,7 @@ class WebSocketService {
       }
 
       this.roomId = roomId;
+      console.log("💾 Room ID saved:", this.roomId);
       this.socket.emit("join-room", {
          roomId,
          user: {
@@ -87,6 +90,7 @@ class WebSocketService {
             role: userData.role,
             id: this.socket.id,
          },
+         streamUrl: userData.streamUrl, // Отправляем Stream URL
       });
       console.log("✅ Joining room:", roomId, "as", userData.role);
    }
@@ -106,6 +110,30 @@ class WebSocketService {
       }
    }
 
+   // Запрос синхронизированного Stream URL
+   requestStreamUrl() {
+      if (!this.socket) {
+         console.error("❌ Cannot request stream URL: socket is null");
+         return;
+      }
+      if (!this.roomId) {
+         console.error("❌ Cannot request stream URL: roomId is null");
+         return;
+      }
+      if (!this.socket.connected) {
+         console.error("❌ Cannot request stream URL: socket is not connected");
+         return;
+      }
+
+      console.log("📤 Requesting stream URL from server for room:", this.roomId);
+      console.log("📤 Socket connected:", this.socket.connected);
+      console.log("📤 Socket ID:", this.socket.id);
+
+      this.socket.emit("request-stream-url", { roomId: this.roomId }, (response) => {
+         console.log("📥 Response from request-stream-url:", response);
+      });
+   }
+
    // Отправка команды управления (только для администратора)
    sendControlCommand(command, data) {
       if (this.socket && this.roomId) {
@@ -121,6 +149,34 @@ class WebSocketService {
    onControlCommand(callback) {
       if (this.socket) {
          this.socket.on("control-command", callback);
+      }
+   }
+
+   // Получение обновлений синхронизированного Stream URL
+   onStreamUrlUpdate(callback) {
+      if (this.socket) {
+         // Удаляем старый обработчик, если он есть, чтобы избежать дублирования
+         this.socket.off("stream-url-update");
+         // Добавляем новый обработчик
+         const handler = (streamUrl) => {
+            console.log("📡 stream-url-update event received:", streamUrl);
+            console.log("📡 Socket ID:", this.socket.id);
+            console.log("📡 Socket connected:", this.socket.connected);
+            console.log("📡 Event type:", typeof streamUrl);
+            if (streamUrl && typeof streamUrl === 'string') {
+               callback(streamUrl);
+            } else {
+               console.error("❌ Invalid stream URL received:", streamUrl);
+            }
+         };
+         this.socket.on("stream-url-update", handler);
+         console.log("✅ Subscribed to stream-url-update events");
+
+         // Проверяем, что обработчик действительно зарегистрирован
+         const listeners = this.socket.listeners("stream-url-update");
+         console.log("🔍 Registered listeners for stream-url-update:", listeners.length);
+      } else {
+         console.error("❌ Cannot subscribe to stream-url-update: socket is null");
       }
    }
 

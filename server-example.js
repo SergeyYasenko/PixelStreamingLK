@@ -190,35 +190,28 @@ app.get("/api/proxy/streamers", async (req, res) => {
                   (contentType.includes("text/html") || contentType.includes("text/plain"));
 
                if (isAvailable) {
-                  // Дополнительная проверка: читаем начало ответа, чтобы убедиться, что это не страница ошибки
+                  // Проверяем наличие поля "Streamer ID" в настройках Pixel Streaming
                   try {
                      const text = await response.text();
 
-                     // Более строгая проверка: ищем конкретные признаки Pixel Streaming
-                     const hasPixelStreamingContent =
-                        (text.includes("PixelStreaming") || text.includes("pixelstreaming")) &&
-                        (text.includes("UnrealEngine") || text.includes("WebRTC") || text.includes("streaming") || text.includes("webrtc"));
+                     // Ищем наличие поля "Streamer ID" в настройках
+                     const hasStreamerIdField = text.includes("Streamer ID") ||
+                        text.includes("StreamerId") ||
+                        text.includes("streamer-id") ||
+                        text.includes("streamerId");
 
-                     // Также проверяем, что это не страница ошибки
+                     // Проверяем, что это не страница ошибки
                      const isErrorPage = text.includes("GAVE UP WAITING") ||
                         text.includes("404") ||
-                        text.includes("Not Found") ||
-                        text.includes("Error") ||
-                        text.length < 500; // Очень маленькие страницы - вероятно ошибка
+                        text.includes("Not Found");
 
-                     const isReallyAvailable = hasPixelStreamingContent && !isErrorPage && text.length > 1000;
+                     const isReallyAvailable = hasStreamerIdField && !isErrorPage;
 
                      if (isReallyAvailable) {
                         availableStreamers.push(streamerId);
-                        console.log(`[Proxy] ✓ Streamer ${streamerId} is available and has valid content`);
-                        console.log(`  - Text length: ${text.length}`);
-                        console.log(`  - Has PixelStreaming: ${text.includes("PixelStreaming") || text.includes("pixelstreaming")}`);
+                        console.log(`[Proxy] ✓ Streamer ${streamerId} is available (has Streamer ID field)`);
                      } else {
-                        console.log(`[Proxy] ✗ Streamer ${streamerId} returned HTML but:`);
-                        console.log(`  - Text length: ${text.length}`);
-                        console.log(`  - Has PixelStreaming: ${text.includes("PixelStreaming") || text.includes("pixelstreaming")}`);
-                        console.log(`  - Is error page: ${isErrorPage}`);
-                        console.log(`  - Not available`);
+                        console.log(`[Proxy] ✗ Streamer ${streamerId} not available (no Streamer ID field or error page)`);
                      }
                   } catch (textError) {
                      console.log(`[Proxy] ✗ Streamer ${streamerId}: Error reading text: ${textError.message}`);
@@ -328,36 +321,28 @@ app.get("/api/proxy/check-streamer", async (req, res) => {
 
          // Проверяем, что ответ успешный и это HTML страница
          if (status >= 200 && status < 400 && (contentType.includes("text/html") || contentType.includes("text/plain"))) {
-            // Дополнительная проверка: читаем начало ответа, чтобы убедиться, что это не страница ошибки
+            // Проверяем наличие поля "Streamer ID" в настройках Pixel Streaming
             try {
                const text = await response.text();
 
-               // Более строгая проверка: ищем конкретные признаки Pixel Streaming
-               const hasPixelStreamingContent =
-                  (text.includes("PixelStreaming") || text.includes("pixelstreaming")) &&
-                  (text.includes("UnrealEngine") || text.includes("WebRTC") || text.includes("streaming") || text.includes("webrtc"));
+               // Ищем наличие поля "Streamer ID" в настройках
+               const hasStreamerIdField = text.includes("Streamer ID") ||
+                  text.includes("StreamerId") ||
+                  text.includes("streamer-id") ||
+                  text.includes("streamerId");
 
-               // Также проверяем, что это не страница ошибки
+               // Проверяем, что это не страница ошибки
                const isErrorPage = text.includes("GAVE UP WAITING") ||
                   text.includes("404") ||
-                  text.includes("Not Found") ||
-                  text.includes("Error") ||
-                  text.length < 500; // Очень маленькие страницы - вероятно ошибка
+                  text.includes("Not Found");
 
-               const isAvailable = hasPixelStreamingContent && !isErrorPage && text.length > 1000;
+               const isAvailable = hasStreamerIdField && !isErrorPage;
 
-               console.log(`[Check Streamer] ${streamerId}:`);
-               console.log(`  - Status: ${status}, ContentType: ${contentType}`);
-               console.log(`  - Text length: ${text.length}`);
-               console.log(`  - Has PixelStreaming: ${text.includes("PixelStreaming") || text.includes("pixelstreaming")}`);
-               console.log(`  - Has UnrealEngine/WebRTC: ${text.includes("UnrealEngine") || text.includes("WebRTC") || text.includes("streaming")}`);
-               console.log(`  - Is error page: ${isErrorPage}`);
-               console.log(`  - Available: ${isAvailable}`);
+               console.log(`[Check Streamer] ${streamerId}: status=${status}, hasStreamerIdField=${hasStreamerIdField}, isErrorPage=${isErrorPage}, available=${isAvailable}`);
 
                res.json({ available: isAvailable });
             } catch (textError) {
                console.log(`[Check Streamer] ${streamerId}: Error reading text: ${textError.message}`);
-               // Если не удалось прочитать текст, считаем недоступным
                res.json({ available: false });
             }
          } else {

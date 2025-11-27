@@ -112,6 +112,18 @@ const getStreamServerUrl = () => {
    return `${protocol}//${host}:${port}/?StreamerId=${streamerId}`;
 };
 
+const getWebSocketServerUrl = () => {
+   // Используем тот же хост, что и у фронтенда, но порт 3001 для WebSocket сервера
+   const host = window.location.hostname;
+   const wsPort = import.meta.env.VITE_WS_SERVER_PORT || "3001";
+   const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+   // Если есть переменная окружения, используем её
+   if (import.meta.env.VITE_WS_SERVER_URL) {
+      return import.meta.env.VITE_WS_SERVER_URL;
+   }
+   return `${protocol}//${host}:${wsPort}`;
+};
+
 const computedStreamUrl = computed(() => {
    if (synchronizedStreamUrl.value) {
       return synchronizedStreamUrl.value;
@@ -149,8 +161,7 @@ const handleStreamUrlUpdate = (streamUrl) => {
 };
 
 onMounted(() => {
-   const wsServerUrl =
-      import.meta.env.VITE_WS_SERVER_URL || "http://localhost:3001";
+   const wsServerUrl = getWebSocketServerUrl();
 
    const socket = websocketService.connect(wsServerUrl);
 

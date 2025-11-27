@@ -78,8 +78,16 @@
                   <p v-if="isLoadingRooms" class="form-hint">
                      Загрузка списка комнат...
                   </p>
-                  <p v-else-if="availableRooms.length === 0" class="form-hint">
-                     Нет доступных комнат. Проверьте подключение к серверу.
+                  <p
+                     v-else-if="availableRooms.length === 0"
+                     class="form-hint"
+                     :class="{ 'form-hint-error': streamerError }"
+                  >
+                     {{
+                        streamerError
+                           ? "Ошибка подключения к серверу. Проверьте, что WebSocket сервер запущен."
+                           : "Нет доступных комнат. Проверьте подключение к серверу."
+                     }}
                   </p>
                </div>
                <button
@@ -124,14 +132,27 @@ const getStreamServerUrl = () => {
    return `${protocol}//${host}:${port}`;
 };
 
+const getWebSocketServerUrl = () => {
+   // Используем тот же хост, что и у фронтенда, но порт 3001 для WebSocket сервера
+   const host = window.location.hostname;
+   const wsPort = import.meta.env.VITE_WS_SERVER_PORT || "3001";
+   const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+   // Если есть переменная окружения, используем её
+   if (import.meta.env.VITE_WS_SERVER_URL) {
+      return import.meta.env.VITE_WS_SERVER_URL;
+   }
+   return `${protocol}//${host}:${wsPort}`;
+};
+
 const fetchAvailableRooms = async () => {
    isLoadingRooms.value = true;
+   streamerError.value = false;
+
    try {
       const streamServerUrl = getStreamServerUrl();
 
       // Используем прокси через наш WebSocket сервер для обхода CORS
-      const wsServerUrl =
-         import.meta.env.VITE_WS_SERVER_URL || "http://localhost:3001";
+      const wsServerUrl = getWebSocketServerUrl();
       const proxyEndpoint = `${wsServerUrl}/api/proxy/streamers`;
 
       try {
@@ -204,14 +225,18 @@ const fetchAvailableRooms = async () => {
          }
       } catch (proxyError) {
          // Если прокси недоступен, список остается пустым
+         streamerError.value = true;
       }
 
       // Если прокси не вернул список, оставляем список пустым
       // НЕ используем дефолтные значения - только реальные данные от сервера
-      availableRooms.value = [];
+      if (availableRooms.value.length === 0) {
+         streamerError.value = true;
+      }
    } catch (error) {
       // В случае ошибки список остается пустым
       availableRooms.value = [];
+      streamerError.value = true;
    } finally {
       isLoadingRooms.value = false;
    }
@@ -376,6 +401,11 @@ const handleLogin = () => {
    margin-top: 0.5rem;
    font-size: 0.875rem;
    color: rgba(242, 242, 242, 0.7);
+}
+
+.form-hint-error {
+   color: #e74c3c;
+   font-weight: 500;
 }
 
 .select-wrapper {

@@ -35,6 +35,108 @@ app.get("/health", (req, res) => {
    res.json({ status: "healthy" });
 });
 
+// Прокси для получения списка streamers от Pixel Streaming сервера
+// Это обходит CORS ограничения
+app.get("/api/proxy/streamers", async (req, res) => {
+   try {
+      // Используем тот же хост, что и у запроса, но порт 80 для Pixel Streaming
+      const streamServerHost = req.get("host")?.split(":")[0] || req.hostname || "localhost";
+      const streamServerPort = process.env.STREAM_SERVER_PORT || "80";
+      const protocol = req.protocol || "http";
+      const streamServerUrl = streamServerPort === "80" && protocol === "http"
+         ? `${protocol}://${streamServerHost}`
+         : streamServerPort === "443" && protocol === "https"
+            ? `${protocol}://${streamServerHost}`
+            : `${protocol}://${streamServerHost}:${streamServerPort}`;
+
+      const possibleEndpoints = [
+         "/api/streamers",
+         "/streamers",
+         "/api/list",
+         "/list",
+         "/api/sessions",
+         "/sessions",
+      ];
+
+      for (const endpoint of possibleEndpoints) {
+         try {
+            const response = await fetch(`${streamServerUrl}${endpoint}`, {
+               method: "GET",
+               headers: {
+                  "Content-Type": "application/json",
+               },
+            });
+
+            if (response.ok) {
+               const data = await response.json();
+               let streamersList = null;
+
+               if (Array.isArray(data)) {
+                  streamersList = data;
+               } else if (data.streamers && Array.isArray(data.streamers)) {
+                  streamersList = data.streamers;
+               } else if (data.list && Array.isArray(data.list)) {
+                  streamersList = data.list;
+               } else if (data.sessions && Array.isArray(data.sessions)) {
+                  streamersList = data.sessions;
+               }
+
+               if (streamersList && streamersList.length > 0) {
+                  return res.json(streamersList);
+               }
+            }
+         } catch (error) {
+            // Продолжаем пробовать другие endpoints
+            continue;
+         }
+      }
+
+      // Если ни один endpoint не сработал, возвращаем пустой массив
+      res.json([]);
+   } catch (error) {
+      res.status(500).json({ error: "Failed to fetch streamers" });
+   }
+});
+
+// Прокси для проверки доступности streamer
+app.get("/api/proxy/check-streamer", async (req, res) => {
+   try {
+      const { streamerId } = req.query;
+
+      if (!streamerId) {
+         return res.status(400).json({ error: "streamerId is required" });
+      }
+
+      // Используем тот же хост, что и у запроса, но порт 80 для Pixel Streaming
+      const streamServerHost = req.get("host")?.split(":")[0] || req.hostname || "localhost";
+      const streamServerPort = process.env.STREAM_SERVER_PORT || "80";
+      const protocol = req.protocol || "http";
+      const streamServerUrl = streamServerPort === "80" && protocol === "http"
+         ? `${protocol}://${streamServerHost}`
+         : streamServerPort === "443" && protocol === "https"
+            ? `${protocol}://${streamServerHost}`
+            : `${protocol}://${streamServerHost}:${streamServerPort}`;
+      const streamerUrl = `${streamServerUrl}/?StreamerId=${streamerId}`;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+      try {
+         const response = await fetch(streamerUrl, {
+            method: "HEAD",
+            signal: controller.signal,
+         });
+         clearTimeout(timeoutId);
+         res.json({ available: response.ok || response.status < 500 });
+      } catch (fetchError) {
+         clearTimeout(timeoutId);
+         res.json({ available: false });
+      }
+   } catch (error) {
+      res.json({ available: false });
+   }
+});
+
 const rooms = new Map();
 
 io.on("connection", (socket) => {

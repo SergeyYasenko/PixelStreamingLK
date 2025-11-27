@@ -110,9 +110,17 @@ const streamerSelectElement = ref(null);
 const streamerError = ref(false);
 
 const getStreamServerUrl = () => {
-   const host = import.meta.env.VITE_STREAM_SERVER_HOST || "72.61.228.213";
+   // Используем тот же хост, что и у фронтенда, но порт 80 для Pixel Streaming
+   const host = window.location.hostname;
    const port = import.meta.env.VITE_STREAM_PORT || "80";
    const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+   // Если порт 80, не добавляем его в URL (стандартный HTTP порт)
+   if (port === "80" && protocol === "http:") {
+      return `${protocol}//${host}`;
+   }
+   if (port === "443" && protocol === "https:") {
+      return `${protocol}//${host}`;
+   }
    return `${protocol}//${host}:${port}`;
 };
 
@@ -121,116 +129,84 @@ const fetchAvailableRooms = async () => {
    try {
       const streamServerUrl = getStreamServerUrl();
 
-      // Pixel Streaming Signalling Server API для получения списка streamers
-      // Попробуем несколько возможных endpoints согласно документации
-      const possibleEndpoints = [
-         `${streamServerUrl}/api/streamers`,
-         `${streamServerUrl}/streamers`,
-         `${streamServerUrl}/api/list`,
-         `${streamServerUrl}/list`,
-         `${streamServerUrl}/api/sessions`,
-         `${streamServerUrl}/sessions`,
-      ];
+      // Используем прокси через наш WebSocket сервер для обхода CORS
+      const wsServerUrl =
+         import.meta.env.VITE_WS_SERVER_URL || "http://localhost:3001";
+      const proxyEndpoint = `${wsServerUrl}/api/proxy/streamers`;
 
-      let streamersList = null;
+      try {
+         const response = await fetch(proxyEndpoint, {
+            method: "GET",
+            headers: {
+               "Content-Type": "application/json",
+            },
+         });
 
-      // Пытаемся получить список через HTTP API
-      for (const endpoint of possibleEndpoints) {
-         try {
-            const response = await fetch(endpoint, {
-               method: "GET",
-               headers: {
-                  "Content-Type": "application/json",
-               },
-            });
+         if (response.ok) {
+            const streamersList = await response.json();
 
-            if (response.ok) {
-               const data = await response.json();
+            if (
+               streamersList &&
+               Array.isArray(streamersList) &&
+               streamersList.length > 0
+            ) {
+               // Проверяем доступность каждого streamer через прокси
+               const checkedRooms = [];
 
-               // Обрабатываем разные форматы ответа API
-               if (Array.isArray(data)) {
-                  streamersList = data;
-               } else if (data.streamers && Array.isArray(data.streamers)) {
-                  streamersList = data.streamers;
-               } else if (data.list && Array.isArray(data.list)) {
-                  streamersList = data.list;
-               } else if (data.sessions && Array.isArray(data.sessions)) {
-                  streamersList = data.sessions;
-               }
-
-               if (streamersList && streamersList.length > 0) {
-                  // Проверяем доступность каждого streamer через реальные запросы
-                  const checkedRooms = [];
-
-                  // Функция для проверки доступности streamer с таймаутом
-                  const checkStreamerAvailability = async (
-                     streamerId,
-                     label
-                  ) => {
-                     const streamerUrl = `${streamServerUrl}/?StreamerId=${streamerId}`;
-
-                     try {
-                        const controller = new AbortController();
-                        const timeoutId = setTimeout(
-                           () => controller.abort(),
-                           2000
-                        );
-
-                        try {
-                           const response = await fetch(streamerUrl, {
-                              method: "HEAD",
-                              signal: controller.signal,
-                           });
-                           clearTimeout(timeoutId);
-                           // Если получили ответ (даже с ошибкой CORS), сервер доступен
-                           return { streamerId, label };
-                        } catch (fetchError) {
-                           clearTimeout(timeoutId);
-                           // Если это ошибка CORS (TypeError), сервер может быть доступен
-                           if (
-                              fetchError.name === "TypeError" &&
-                              fetchError.message.includes("CORS")
-                           ) {
-                              return { streamerId, label };
-                           }
-                           // Для других ошибок (таймаут, сеть) - streamer недоступен
-                           throw fetchError;
+               // Функция для проверки доступности streamer через прокси
+               const checkStreamerAvailability = async (streamerId, label) => {
+                  try {
+                     const checkResponse = await fetch(
+                        `${wsServerUrl}/api/proxy/check-streamer?streamerId=${encodeURIComponent(
+                           streamerId
+                        )}`,
+                        {
+                           method: "GET",
+                           headers: {
+                              "Content-Type": "application/json",
+                           },
                         }
-                     } catch (checkError) {
-                        // Streamer недоступен (таймаут или сетевая ошибка)
-                        return null;
+                     );
+
+                     if (checkResponse.ok) {
+                        const result = await checkResponse.json();
+                        if (result.available) {
+                           return { streamerId, label };
+                        }
                      }
-                  };
+                     return null;
+                  } catch (checkError) {
+                     return null;
+                  }
+               };
 
-                  // Проверяем все streamers параллельно
-                  const checkPromises = streamersList.map(async (item) => {
-                     const streamerId =
-                        typeof item === "string"
-                           ? item
-                           : item.id || item.streamerId || item.sessionId;
-                     const label =
-                        typeof item === "string"
-                           ? item
-                           : item.name || item.label || streamerId;
+               // Проверяем все streamers параллельно
+               const checkPromises = streamersList.map(async (item) => {
+                  const streamerId =
+                     typeof item === "string"
+                        ? item
+                        : item.id || item.streamerId || item.sessionId;
+                  const label =
+                     typeof item === "string"
+                        ? item
+                        : item.name || item.label || streamerId;
 
-                     return await checkStreamerAvailability(streamerId, label);
-                  });
+                  return await checkStreamerAvailability(streamerId, label);
+               });
 
-                  const results = await Promise.all(checkPromises);
-                  checkedRooms.push(...results.filter((room) => room !== null));
+               const results = await Promise.all(checkPromises);
+               checkedRooms.push(...results.filter((room) => room !== null));
 
-                  availableRooms.value = checkedRooms;
-                  isLoadingRooms.value = false;
-                  return;
-               }
+               availableRooms.value = checkedRooms;
+               isLoadingRooms.value = false;
+               return;
             }
-         } catch (apiError) {
-            // Продолжаем пробовать другие endpoints
-            continue;
          }
+      } catch (proxyError) {
+         // Если прокси недоступен, список остается пустым
       }
 
-      // Если API не вернул список, оставляем список пустым
+      // Если прокси не вернул список, оставляем список пустым
       // НЕ используем дефолтные значения - только реальные данные от сервера
       availableRooms.value = [];
    } catch (error) {

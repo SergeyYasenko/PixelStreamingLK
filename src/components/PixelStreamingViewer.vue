@@ -97,10 +97,18 @@ const synchronizedStreamUrl = ref(null);
 const iframeRef = ref(null);
 
 const getStreamServerUrl = () => {
-   const host = import.meta.env.VITE_STREAM_SERVER_HOST || "72.61.228.213";
+   // Используем тот же хост, что и у фронтенда, но порт 80 для Pixel Streaming
+   const host = window.location.hostname;
    const port = import.meta.env.VITE_STREAM_PORT || "80";
    const protocol = window.location.protocol === "https:" ? "https:" : "http:";
    const streamerId = props.streamerId || "DefaultStreamer";
+   // Если порт 80, не добавляем его в URL (стандартный HTTP порт)
+   if (port === "80" && protocol === "http:") {
+      return `${protocol}//${host}/?StreamerId=${streamerId}`;
+   }
+   if (port === "443" && protocol === "https:") {
+      return `${protocol}//${host}/?StreamerId=${streamerId}`;
+   }
    return `${protocol}//${host}:${port}/?StreamerId=${streamerId}`;
 };
 

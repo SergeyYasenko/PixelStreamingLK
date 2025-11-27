@@ -21,9 +21,10 @@ export default defineConfig({
          '.ngrok-free.dev', // На случай использования ngrok (новый домен)
       ],
       hmr: {
-         protocol: 'ws',
-         host: '0.0.0.0',
-         port: 5173,
+         clientPort: 5173,
+      },
+      watch: {
+         usePolling: true,
       }
    }
 })

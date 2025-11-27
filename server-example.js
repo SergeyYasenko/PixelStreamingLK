@@ -3,6 +3,9 @@ import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
 
+// Для Node.js версий ниже 18, может потребоваться node-fetch
+// Если fetch недоступен, установите: npm install node-fetch
+
 const app = express();
 app.use(
    cors({
@@ -45,7 +48,28 @@ app.get("/api/proxy/streamers", async (req, res) => {
 
    try {
       // Используем тот же хост, что и у запроса, но порт 80 для Pixel Streaming
-      const streamServerHost = req.get("host")?.split(":")[0] || req.hostname || "localhost";
+      // Получаем хост из заголовка Referer или Host
+      const referer = req.get("referer") || "";
+      let streamServerHost = req.hostname || "localhost";
+
+      // Пытаемся извлечь хост из Referer
+      if (referer) {
+         try {
+            const refererUrl = new URL(referer);
+            streamServerHost = refererUrl.hostname;
+         } catch (e) {
+            // Если не удалось распарсить, используем hostname из запроса
+         }
+      }
+
+      // Если hostname все еще localhost, пробуем получить из Host заголовка
+      if (streamServerHost === "localhost" || streamServerHost === "127.0.0.1") {
+         const hostHeader = req.get("host");
+         if (hostHeader) {
+            streamServerHost = hostHeader.split(":")[0];
+         }
+      }
+
       const streamServerPort = process.env.STREAM_SERVER_PORT || "80";
       const protocol = req.protocol || "http";
       const streamServerUrl = streamServerPort === "80" && protocol === "http"
@@ -55,6 +79,7 @@ app.get("/api/proxy/streamers", async (req, res) => {
             : `${protocol}://${streamServerHost}:${streamServerPort}`;
 
       console.log(`[Proxy] Attempting to fetch streamers from: ${streamServerUrl}`);
+      console.log(`[Proxy] Request hostname: ${req.hostname}, Referer: ${referer}`);
 
       const possibleEndpoints = [
          "/api/streamers",

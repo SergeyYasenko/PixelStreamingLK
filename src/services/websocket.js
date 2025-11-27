@@ -198,10 +198,17 @@ class WebSocketService {
    // Отправка screen share offer (для администратора)
    sendScreenShareOffer(data) {
       if (this.socket && this.roomId) {
+         console.log("📤 Sending screen-share-offer:", {
+            roomId: this.roomId,
+            to: data.to,
+            offerType: data.offer?.type,
+         });
          this.socket.emit("screen-share-offer", {
             roomId: this.roomId,
             ...data,
          });
+      } else {
+         console.error("❌ Cannot send screen-share-offer: socket:", !!this.socket, "roomId:", this.roomId);
       }
    }
 

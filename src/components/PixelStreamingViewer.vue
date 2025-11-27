@@ -76,6 +76,11 @@
                   autoplay
                   playsinline
                   muted
+                  @loadedmetadata="
+                     () => console.log('📺 Video metadata loaded')
+                  "
+                  @play="() => console.log('📺 Video started playing')"
+                  @error="(e) => console.error('❌ Video error:', e)"
                ></video>
                <!-- Предупреждение, если хост еще не подключился или не начал трансляцию -->
                <div v-else class="pixelstreaming-viewer-waiting">
@@ -199,10 +204,18 @@ const getRoleLabel = () => {
    return roleLabels[props.role] || props.role || "Роль";
 };
 
+// Кэшируем roomId, чтобы не вычислять его каждый раз
+let cachedRoomId = null;
+
 // Генерируем ID комнаты на основе нормализованного streamUrl
 // ВАЖНО: Все пользователи с одним streamUrl должны попадать в одну комнату
 // Используем нормализованный streamUrl, чтобы гарантировать одинаковый roomId
 const getRoomId = () => {
+   // Используем кэш, если он есть
+   if (cachedRoomId) {
+      return cachedRoomId;
+   }
+
    // Сначала получаем нормализованный streamUrl через getVagonStreamUrl
    const streamUrl = getVagonStreamUrl(props.projectUrl);
 
@@ -217,23 +230,24 @@ const getRoomId = () => {
          const streamUuid = uuidMatch[1].toLowerCase().trim();
          // Используем UUID напрямую для генерации roomId
          // Это гарантирует, что все пользователи с одним UUID попадут в одну комнату
-         const roomId = `room-${streamUuid}`;
-         console.log("🏠 Room ID generated from stream UUID:", roomId);
+         cachedRoomId = `room-${streamUuid}`;
+         console.log("🏠 Room ID generated from stream UUID:", cachedRoomId);
          console.log("🏠 Original projectUrl:", props.projectUrl);
          console.log("🏠 Normalized streamUrl:", streamUrl);
          console.log("🏠 Extracted UUID:", streamUuid);
-         return roomId;
+         return cachedRoomId;
       }
 
       // Если не удалось извлечь UUID, используем хеш от streamUrl
-      const roomId = btoa(streamUrl).replace(/[+/=]/g, "");
-      console.log("🏠 Room ID generated from streamUrl hash:", roomId);
+      cachedRoomId = btoa(streamUrl).replace(/[+/=]/g, "");
+      console.log("🏠 Room ID generated from streamUrl hash:", cachedRoomId);
       console.log("🏠 StreamUrl:", streamUrl);
-      return roomId;
+      return cachedRoomId;
    }
 
+   cachedRoomId = "default-room";
    console.log("🏠 Using default room (no projectUrl)");
-   return "default-room";
+   return cachedRoomId;
 };
 
 // Синхронизированный URL для Vagon Stream (получается от сервера)
@@ -331,40 +345,137 @@ const handleUsersUpdate = (users) => {
 const handleScreenShareOffer = async (data) => {
    try {
       const { offer, from } = data;
+      console.log("📺 Handling screen share offer from:", from);
+
+      // Закрываем предыдущее соединение, если есть
+      if (peerConnection) {
+         peerConnection.close();
+         peerConnection = null;
+      }
 
       // Создаем peer connection
       peerConnection = new RTCPeerConnection({
-         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+         iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+         ],
       });
 
       // Обрабатываем получение потока
       peerConnection.ontrack = (event) => {
-         console.log("📺 Received remote stream:", event.streams[0]);
-         remoteStream.value = event.streams[0];
-         if (viewerVideo.value) {
-            viewerVideo.value.srcObject = event.streams[0];
+         console.log("📺 ontrack event received:", event);
+         console.log("📺 Streams:", event.streams);
+         console.log("📺 Track:", event.track);
+         console.log("📺 Track kind:", event.track?.kind);
+         console.log("📺 Track enabled:", event.track?.enabled);
+         console.log("📺 Track readyState:", event.track?.readyState);
+
+         if (event.streams && event.streams.length > 0) {
+            const stream = event.streams[0];
+            console.log("📺 Setting remote stream:", stream);
+            console.log("📺 Stream tracks:", stream.getTracks());
+            remoteStream.value = stream;
+
+            // Используем nextTick, чтобы убедиться, что DOM обновлен
+            setTimeout(() => {
+               if (viewerVideo.value) {
+                  console.log("📺 Setting video srcObject...");
+                  viewerVideo.value.srcObject = stream;
+                  console.log("📺 Video element srcObject set");
+
+                  // Ждем метаданные видео
+                  viewerVideo.value.onloadedmetadata = () => {
+                     console.log(
+                        "📺 Video metadata loaded, dimensions:",
+                        viewerVideo.value.videoWidth,
+                        "x",
+                        viewerVideo.value.videoHeight
+                     );
+                     viewerVideo.value?.play().catch((err) => {
+                        console.error("❌ Error playing video:", err);
+                     });
+                  };
+
+                  // Пытаемся запустить воспроизведение сразу
+                  viewerVideo.value
+                     .play()
+                     .then(() => {
+                        console.log("✅ Video started playing");
+                     })
+                     .catch((err) => {
+                        console.warn(
+                           "⚠️ Could not play video immediately:",
+                           err
+                        );
+                     });
+               } else {
+                  console.warn("⚠️ viewerVideo ref is null, will retry...");
+                  // Повторяем попытку через небольшую задержку
+                  setTimeout(() => {
+                     if (viewerVideo.value && remoteStream.value) {
+                        viewerVideo.value.srcObject = remoteStream.value;
+                        viewerVideo.value.play().catch(console.error);
+                     }
+                  }, 100);
+               }
+            }, 100);
+         } else if (event.track) {
+            // Если потока нет, но есть трек, создаем новый поток
+            console.log("📺 Creating stream from track");
+            const stream = new MediaStream([event.track]);
+            remoteStream.value = stream;
+            setTimeout(() => {
+               if (viewerVideo.value) {
+                  viewerVideo.value.srcObject = stream;
+                  viewerVideo.value.play().catch(console.error);
+               }
+            }, 100);
+         } else {
+            console.warn("⚠️ No streams or tracks in ontrack event");
          }
+      };
+
+      // Обрабатываем изменения состояния соединения
+      peerConnection.onconnectionstatechange = () => {
+         console.log("📺 Connection state:", peerConnection.connectionState);
+         if (peerConnection.connectionState === "failed") {
+            console.error("❌ WebRTC connection failed");
+         }
+      };
+
+      peerConnection.oniceconnectionstatechange = () => {
+         console.log(
+            "📺 ICE connection state:",
+            peerConnection.iceConnectionState
+         );
       };
 
       // Обрабатываем ICE candidates
       peerConnection.onicecandidate = (event) => {
          if (event.candidate) {
+            console.log("🧊 Sending ICE candidate to:", from);
             websocketService.sendIceCandidate({
                roomId: getRoomId(),
                candidate: event.candidate,
                to: from,
             });
+         } else {
+            console.log("🧊 ICE gathering complete");
          }
       };
 
       // Устанавливаем remote description
+      console.log("📺 Setting remote description...");
       await peerConnection.setRemoteDescription(
          new RTCSessionDescription(offer)
       );
+      console.log("✅ Remote description set");
 
       // Создаем answer
+      console.log("📺 Creating answer...");
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
+      console.log("✅ Answer created and local description set");
 
       // Отправляем answer
       websocketService.sendScreenShareAnswer({
@@ -372,8 +483,10 @@ const handleScreenShareOffer = async (data) => {
          answer: answer,
          to: from,
       });
+      console.log("✅ Answer sent to:", from);
    } catch (error) {
       console.error("❌ Error handling screen share offer:", error);
+      console.error("❌ Error details:", error.stack);
    }
 };
 
@@ -487,66 +600,145 @@ const setupPeerConnectionsForViewers = async (stream) => {
       roomId: roomId,
    });
 
-   // Подписываемся на ответы от зрителей
-   websocketService.onScreenShareAnswer(async (data) => {
-      const { answer, from } = data;
-      const connection = viewerConnections.get(from);
-      if (connection) {
-         await connection.setRemoteDescription(
-            new RTCSessionDescription(answer)
+   // Подписываемся на ответы от зрителей (только один раз)
+   if (!websocketService.screenShareAnswerHandler) {
+      websocketService.onScreenShareAnswer(async (data) => {
+         const { answer, from } = data;
+         const connection = viewerConnections.get(from);
+         if (connection) {
+            await connection.setRemoteDescription(
+               new RTCSessionDescription(answer)
+            );
+            console.log(`📺 Answer received from ${from}`);
+         } else {
+            console.warn(`⚠️ No connection found for viewer ${from}`);
+         }
+      });
+      websocketService.screenShareAnswerHandler = true;
+   }
+
+   // Подписываемся на ICE candidates от зрителей (только один раз)
+   if (!websocketService.iceCandidateHandler) {
+      websocketService.onIceCandidate((data) => {
+         const { candidate, from } = data;
+         const connection = viewerConnections.get(from);
+         if (connection && candidate) {
+            connection
+               .addIceCandidate(new RTCIceCandidate(candidate))
+               .then(() => {
+                  console.log(`✅ ICE candidate added from ${from}`);
+               })
+               .catch((error) => {
+                  console.error(
+                     `❌ Error adding ICE candidate from ${from}:`,
+                     error
+                  );
+               });
+         }
+      });
+      websocketService.iceCandidateHandler = true;
+   }
+
+   // Создаем peer connections для всех существующих зрителей
+   const socketId = websocketService.socketInstance?.id;
+   const existingViewers = connectedUsers.value.filter(
+      (user) => user.role !== "admin" && user.id !== socketId
+   );
+
+   console.log(
+      `📺 Setting up peer connections for ${existingViewers.length} existing viewers`
+   );
+
+   existingViewers.forEach((viewer) => {
+      if (!viewerConnections.has(viewer.id)) {
+         createPeerConnectionForViewer(viewer.id, stream);
+         console.log(
+            `📺 Creating peer connection for existing viewer: ${viewer.name} (${viewer.id})`
          );
-         console.log(`📺 Answer received from ${from}`);
       }
    });
-
-   // Подписываемся на ICE candidates от зрителей
-   websocketService.onIceCandidate((data) => {
-      const { candidate, from } = data;
-      const connection = viewerConnections.get(from);
-      if (connection && candidate) {
-         connection.addIceCandidate(new RTCIceCandidate(candidate));
-      }
-   });
-
-   console.log("📺 Setting up peer connections for viewers");
 };
 
 // Создание peer connection для нового зрителя
 const createPeerConnectionForViewer = async (viewerId, stream) => {
-   const connection = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-   });
+   try {
+      console.log(`📺 Creating peer connection for viewer: ${viewerId}`);
 
-   // Добавляем треки в peer connection
-   stream.getTracks().forEach((track) => {
-      connection.addTrack(track, stream);
-   });
+      const connection = new RTCPeerConnection({
+         iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+         ],
+      });
 
-   // Обрабатываем ICE candidates
-   connection.onicecandidate = (event) => {
-      if (event.candidate) {
-         websocketService.sendIceCandidate({
-            roomId: getRoomId(),
-            candidate: event.candidate,
-            to: viewerId,
-         });
-      }
-   };
+      // Добавляем треки в peer connection
+      stream.getTracks().forEach((track) => {
+         connection.addTrack(track, stream);
+         console.log(
+            `📺 Added track to peer connection:`,
+            track.kind,
+            track.id
+         );
+      });
 
-   viewerConnections.set(viewerId, connection);
+      // Обрабатываем ICE candidates
+      connection.onicecandidate = (event) => {
+         if (event.candidate) {
+            console.log(`🧊 Sending ICE candidate to viewer ${viewerId}`);
+            websocketService.sendIceCandidate({
+               roomId: getRoomId(),
+               candidate: event.candidate,
+               to: viewerId,
+            });
+         } else {
+            console.log(`🧊 ICE gathering complete for viewer ${viewerId}`);
+         }
+      };
 
-   // Создаем offer
-   const offer = await connection.createOffer();
-   await connection.setLocalDescription(offer);
+      // Обрабатываем изменения состояния соединения
+      connection.onconnectionstatechange = () => {
+         console.log(
+            `📺 Connection state for ${viewerId}:`,
+            connection.connectionState
+         );
+      };
 
-   // Отправляем offer зрителю
-   websocketService.sendScreenShareOffer({
-      roomId: getRoomId(),
-      offer: offer,
-      to: viewerId,
-   });
+      connection.oniceconnectionstatechange = () => {
+         console.log(
+            `📺 ICE connection state for ${viewerId}:`,
+            connection.iceConnectionState
+         );
+      };
 
-   return connection;
+      viewerConnections.set(viewerId, connection);
+
+      // Создаем offer
+      console.log(`📺 Creating offer for viewer ${viewerId}...`);
+      const offer = await connection.createOffer({
+         offerToReceiveAudio: false,
+         offerToReceiveVideo: false,
+      });
+      await connection.setLocalDescription(offer);
+      console.log(
+         `✅ Offer created and local description set for viewer ${viewerId}`
+      );
+
+      // Отправляем offer зрителю
+      websocketService.sendScreenShareOffer({
+         roomId: getRoomId(),
+         offer: offer,
+         to: viewerId,
+      });
+      console.log(`✅ Offer sent to viewer ${viewerId}`);
+
+      return connection;
+   } catch (error) {
+      console.error(
+         `❌ Error creating peer connection for viewer ${viewerId}:`,
+         error
+      );
+      throw error;
+   }
 };
 
 // Остановка screen sharing
@@ -610,13 +802,30 @@ onMounted(() => {
          }
       });
 
-      // Подписываемся на ICE candidates
-      websocketService.onIceCandidate((data) => {
-         const { candidate, from } = data;
-         if (peerConnection && candidate) {
-            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-         }
-      });
+      // Подписываемся на ICE candidates (для зрителей)
+      if (!isAdmin.value) {
+         websocketService.onIceCandidate((data) => {
+            const { candidate, from } = data;
+            console.log("🧊 ICE candidate received from:", from, candidate);
+            if (peerConnection && candidate) {
+               peerConnection
+                  .addIceCandidate(new RTCIceCandidate(candidate))
+                  .then(() => {
+                     console.log("✅ ICE candidate added");
+                  })
+                  .catch((error) => {
+                     console.error("❌ Error adding ICE candidate:", error);
+                  });
+            } else {
+               console.warn(
+                  "⚠️ Cannot add ICE candidate - peerConnection:",
+                  !!peerConnection,
+                  "candidate:",
+                  !!candidate
+               );
+            }
+         });
+      }
 
       websocketService.onScreenShareStream((stream) => {
          console.log("📺 Screen share stream received:", stream);

@@ -328,11 +328,25 @@ io.on("connection", (socket) => {
 
    socket.on("screen-share-offer", ({ roomId, offer, to }) => {
       console.log(`📺 Screen share offer received from ${socket.id} in room ${roomId}`);
+      console.log(`📺 Offer details: type=${offer?.type}, to=${to}`);
+
       if (to) {
          // Отправляем конкретному зрителю
-         io.to(to).emit("screen-share-offer", { offer, from: socket.id });
+         console.log(`📺 Sending offer to specific viewer: ${to}`);
+         const targetSocket = io.sockets.sockets.get(to);
+         if (targetSocket) {
+            console.log(`✅ Target socket found: ${to}, connected: ${targetSocket.connected}`);
+            targetSocket.emit("screen-share-offer", { offer, from: socket.id });
+            console.log(`✅ Offer sent to ${to}`);
+         } else {
+            console.error(`❌ Target socket not found: ${to}`);
+            // Попробуем через комнату
+            io.to(roomId).emit("screen-share-offer", { offer, from: socket.id });
+            console.log(`📺 Offer broadcasted to room ${roomId} as fallback`);
+         }
       } else {
          // Пересылаем offer всем зрителям в комнате
+         console.log(`📺 Broadcasting offer to all viewers in room ${roomId}`);
          socket.to(roomId).emit("screen-share-offer", { offer, from: socket.id });
       }
    });

@@ -26,11 +26,17 @@ const syncStateWithUrl = () => {
       const newUrl = new URL(window.location);
       newUrl.searchParams.set("streamerId", userData.value.streamerId);
       newUrl.searchParams.set("name", userData.value.name);
-      window.history.pushState(
-         { isLoggedIn: true, userData: userData.value },
-         "",
-         newUrl.toString()
-      );
+
+      // Создаем простой объект для pushState (не Vue reactive)
+      const stateData = {
+         isLoggedIn: true,
+         userData: {
+            name: String(userData.value.name),
+            streamerId: String(userData.value.streamerId),
+         },
+      };
+
+      window.history.pushState(stateData, "", newUrl.toString());
    } else {
       // Если не залогинен, очищаем URL
       const newUrl = new URL(window.location);

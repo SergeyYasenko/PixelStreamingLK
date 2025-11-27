@@ -54,9 +54,9 @@
             </div>
          </div>
          <div class="pixelstreaming-wrapper">
-            <!-- Администратор видит iframe с Vagon Stream -->
+            <!-- Все пользователи (и администратор, и зрители) видят один и тот же iframe -->
             <iframe
-               v-if="isAdmin"
+               v-if="computedVagonUrl"
                ref="iframeRef"
                :src="computedVagonUrl"
                class="pixelstreaming-iframe"
@@ -67,36 +67,20 @@
                @error="handleIframeError"
             ></iframe>
 
-            <!-- Зрители видят видеопоток от хоста в том же стиле -->
-            <div v-else class="pixelstreaming-viewer-container">
-               <video
-                  v-if="remoteStream"
-                  ref="viewerVideo"
-                  class="pixelstreaming-iframe"
-                  autoplay
-                  playsinline
-                  muted
-                  @loadedmetadata="
-                     () => console.log('📺 Video metadata loaded')
-                  "
-                  @play="() => console.log('📺 Video started playing')"
-                  @error="(e) => console.error('❌ Video error:', e)"
-               ></video>
-               <!-- Предупреждение, если хост еще не подключился или не начал трансляцию -->
-               <div v-else class="pixelstreaming-viewer-waiting">
-                  <div class="pixelstreaming-viewer-waiting-content">
-                     <div class="pixelstreaming-viewer-waiting-spinner"></div>
-                     <p class="pixelstreaming-viewer-waiting-text">
-                        <span v-if="adminUsers.length === 0">
-                           Ожидание подключения администратора...
-                        </span>
-                        <span v-else>
-                           Ожидание трансляции от администратора...
-                           <br />
-                           <strong>{{ adminUsers[0].name }}</strong>
-                        </span>
-                     </p>
-                  </div>
+            <!-- Предупреждение для зрителей, если URL еще не синхронизирован -->
+            <div v-else-if="!isAdmin" class="pixelstreaming-viewer-waiting">
+               <div class="pixelstreaming-viewer-waiting-content">
+                  <div class="pixelstreaming-viewer-waiting-spinner"></div>
+                  <p class="pixelstreaming-viewer-waiting-text">
+                     <span v-if="adminUsers.length === 0">
+                        Ожидание подключения администратора...
+                     </span>
+                     <span v-else>
+                        Ожидание синхронизации потока...
+                        <br />
+                        <strong>{{ adminUsers[0].name }}</strong>
+                     </span>
+                  </p>
                </div>
             </div>
          </div>
@@ -276,16 +260,8 @@ const computedVagonUrl = computed(() => {
 // Обработка загрузки iframe
 const handleIframeLoad = () => {
    console.log("✅ Vagon Stream iframe loaded successfully");
-
-   // Если мы администратор и еще не начали трансляцию, начинаем
-   if (isAdmin.value && !isSharingScreen.value && iframeRef.value) {
-      // Небольшая задержка для полной загрузки содержимого
-      setTimeout(() => {
-         if (!isSharingScreen.value) {
-            startScreenShare();
-         }
-      }, 1000);
-   }
+   // Больше не используем WebRTC screen sharing
+   // Все пользователи видят один и тот же iframe
 };
 
 // Обработка ошибок iframe
@@ -311,21 +287,8 @@ const handleUsersUpdate = (users) => {
    console.log("👥 Connected users list updated:", connectedUsers.value);
    console.log("👥 Displaying all users:", connectedUsers.value.length);
 
-   // Если мы администратор и есть новые зрители, создаем для них peer connections
-   if (isAdmin.value && localStream.value) {
-      const currentViewerIds = new Set(viewerConnections.keys());
-      const socketId = websocketService.socketInstance?.id;
-      const newViewers = users
-         .filter((user) => user.role !== "admin" && user.id !== socketId)
-         .filter((user) => !currentViewerIds.has(user.id));
-
-      newViewers.forEach((viewer) => {
-         createPeerConnectionForViewer(viewer.id, localStream.value);
-         console.log(
-            `📺 Creating peer connection for viewer: ${viewer.name} (${viewer.id})`
-         );
-      });
-   }
+   // Больше не используем WebRTC screen sharing
+   // Все пользователи видят один и тот же iframe с синхронизированным URL
 
    // Если мы получили обновление пользователей, но еще не получили синхронизированный URL,
    // запрашиваем его (на случай, если автоматическая отправка не сработала)
@@ -353,12 +316,54 @@ const handleScreenShareOffer = async (data) => {
          peerConnection = null;
       }
 
-      // Создаем peer connection
+      // Создаем peer connection с STUN и TURN серверами
       peerConnection = new RTCPeerConnection({
          iceServers: [
+            // STUN серверы
             { urls: "stun:stun.l.google.com:19302" },
             { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" },
+            // Публичные TURN серверы для обхода NAT
+            {
+               urls: "turn:openrelay.metered.ca:80",
+               username: "openrelayproject",
+               credential: "openrelayproject",
+            },
+            {
+               urls: "turn:openrelay.metered.ca:443",
+               username: "openrelayproject",
+               credential: "openrelayproject",
+            },
+            {
+               urls: "turn:openrelay.metered.ca:443?transport=tcp",
+               username: "openrelayproject",
+               credential: "openrelayproject",
+            },
+            // Альтернативные TURN серверы
+            {
+               urls: "turn:relay.metered.ca:80",
+               username: "openrelayproject",
+               credential: "openrelayproject",
+            },
+            {
+               urls: "turn:relay.metered.ca:443",
+               username: "openrelayproject",
+               credential: "openrelayproject",
+            },
+            // Альтернативные публичные TURN серверы
+            {
+               urls: "turn:relay1.expressturn.com:3478",
+               username: "ef",
+               credential: "es",
+            },
+            {
+               urls: "turn:relay2.expressturn.com:3478",
+               username: "ef",
+               credential: "es",
+            },
          ],
+         iceTransportPolicy: "all", // Используем и STUN и TURN
+         iceCandidatePoolSize: 10, // Увеличиваем пул кандидатов
       });
 
       // Обрабатываем получение потока
@@ -444,10 +449,22 @@ const handleScreenShareOffer = async (data) => {
       };
 
       peerConnection.oniceconnectionstatechange = () => {
-         console.log(
-            "📺 ICE connection state:",
-            peerConnection.iceConnectionState
-         );
+         const state = peerConnection.iceConnectionState;
+         console.log("📺 ICE connection state:", state);
+
+         if (state === "failed") {
+            console.error(
+               "❌ ICE connection failed, attempting to restart ICE..."
+            );
+            // Пытаемся перезапустить ICE
+            peerConnection.restartIce().catch((err) => {
+               console.error("❌ Error restarting ICE:", err);
+            });
+         } else if (state === "disconnected") {
+            console.warn("⚠️ ICE connection disconnected");
+         } else if (state === "connected" || state === "completed") {
+            console.log("✅ ICE connection established");
+         }
       };
 
       // Обрабатываем ICE candidates
@@ -666,9 +683,51 @@ const createPeerConnectionForViewer = async (viewerId, stream) => {
 
       const connection = new RTCPeerConnection({
          iceServers: [
+            // STUN серверы
             { urls: "stun:stun.l.google.com:19302" },
             { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" },
+            // Публичные TURN серверы для обхода NAT
+            {
+               urls: "turn:openrelay.metered.ca:80",
+               username: "openrelayproject",
+               credential: "openrelayproject",
+            },
+            {
+               urls: "turn:openrelay.metered.ca:443",
+               username: "openrelayproject",
+               credential: "openrelayproject",
+            },
+            {
+               urls: "turn:openrelay.metered.ca:443?transport=tcp",
+               username: "openrelayproject",
+               credential: "openrelayproject",
+            },
+            // Альтернативные TURN серверы
+            {
+               urls: "turn:relay.metered.ca:80",
+               username: "openrelayproject",
+               credential: "openrelayproject",
+            },
+            {
+               urls: "turn:relay.metered.ca:443",
+               username: "openrelayproject",
+               credential: "openrelayproject",
+            },
+            // Альтернативные публичные TURN серверы
+            {
+               urls: "turn:relay1.expressturn.com:3478",
+               username: "ef",
+               credential: "es",
+            },
+            {
+               urls: "turn:relay2.expressturn.com:3478",
+               username: "ef",
+               credential: "es",
+            },
          ],
+         iceTransportPolicy: "all", // Используем и STUN и TURN
+         iceCandidatePoolSize: 10, // Увеличиваем пул кандидатов
       });
 
       // Добавляем треки в peer connection
@@ -684,7 +743,23 @@ const createPeerConnectionForViewer = async (viewerId, stream) => {
       // Обрабатываем ICE candidates
       connection.onicecandidate = (event) => {
          if (event.candidate) {
-            console.log(`🧊 Sending ICE candidate to viewer ${viewerId}`);
+            const candidate = event.candidate;
+            console.log(`🧊 Sending ICE candidate to viewer ${viewerId}:`, {
+               type: candidate.type,
+               protocol: candidate.protocol,
+               address: candidate.address,
+               port: candidate.port,
+               priority: candidate.priority,
+               foundation: candidate.foundation,
+            });
+
+            // Проверяем, есть ли relay кандидаты (от TURN серверов)
+            if (candidate.type === "relay") {
+               console.log(
+                  `✅ Relay candidate found! TURN server is working for ${viewerId}`
+               );
+            }
+
             websocketService.sendIceCandidate({
                roomId: getRoomId(),
                candidate: event.candidate,
@@ -692,7 +767,37 @@ const createPeerConnectionForViewer = async (viewerId, stream) => {
             });
          } else {
             console.log(`🧊 ICE gathering complete for viewer ${viewerId}`);
+            console.log(
+               `🧊 Final ICE connection state: ${connection.iceConnectionState}`
+            );
+
+            // Получаем все кандидаты для диагностики
+            connection.getStats().then((stats) => {
+               let hasRelay = false;
+               stats.forEach((report) => {
+                  if (
+                     report.type === "local-candidate" &&
+                     report.candidateType === "relay"
+                  ) {
+                     hasRelay = true;
+                     console.log(`✅ Found relay candidate:`, report);
+                  }
+               });
+               if (!hasRelay) {
+                  console.warn(
+                     `⚠️ No relay candidates found! TURN servers may not be working.`
+                  );
+               }
+            });
          }
+      };
+
+      // Обрабатываем изменения состояния ICE gathering
+      connection.onicegatheringstatechange = () => {
+         console.log(
+            `🧊 ICE gathering state for ${viewerId}:`,
+            connection.iceGatheringState
+         );
       };
 
       // Обрабатываем изменения состояния соединения
@@ -704,10 +809,90 @@ const createPeerConnectionForViewer = async (viewerId, stream) => {
       };
 
       connection.oniceconnectionstatechange = () => {
-         console.log(
-            `📺 ICE connection state for ${viewerId}:`,
-            connection.iceConnectionState
-         );
+         const state = connection.iceConnectionState;
+         console.log(`📺 ICE connection state for ${viewerId}:`, state);
+
+         if (state === "failed") {
+            console.error(`❌ ICE connection failed for ${viewerId}`);
+            console.error(`❌ Connection state: ${connection.connectionState}`);
+            console.error(
+               `❌ ICE gathering state: ${connection.iceGatheringState}`
+            );
+
+            // Получаем статистику соединения для диагностики
+            connection.getStats().then((stats) => {
+               console.log(`📊 Connection stats for ${viewerId}:`, stats);
+               let hasRelay = false;
+               stats.forEach((report) => {
+                  if (
+                     report.type === "local-candidate" &&
+                     report.candidateType === "relay"
+                  ) {
+                     hasRelay = true;
+                     console.log(`✅ Found relay candidate in stats:`, report);
+                  }
+                  if (
+                     report.type === "candidate-pair" &&
+                     report.state === "failed"
+                  ) {
+                     console.error(`❌ Failed candidate pair:`, report);
+                  }
+               });
+               if (!hasRelay) {
+                  console.error(
+                     `❌ No relay candidates found! TURN servers are not working.`
+                  );
+               }
+            });
+
+            // Пытаемся перезапустить ICE
+            try {
+               connection.restartIce();
+               console.log(`🔄 ICE restart initiated for ${viewerId}`);
+            } catch (err) {
+               console.error(`❌ Error restarting ICE:`, err);
+               // Если перезапуск не помог, закрываем и создаем новое соединение
+               console.log(
+                  `🔄 Attempting to recreate connection for ${viewerId}...`
+               );
+               setTimeout(() => {
+                  if (localStream.value && viewerConnections.has(viewerId)) {
+                     viewerConnections.delete(viewerId);
+                     connection.close();
+                     createPeerConnectionForViewer(viewerId, localStream.value);
+                  }
+               }, 2000);
+            }
+         } else if (state === "disconnected") {
+            console.warn(`⚠️ ICE connection disconnected for ${viewerId}`);
+            // Пытаемся перезапустить ICE при отключении
+            setTimeout(() => {
+               if (connection.iceConnectionState === "disconnected") {
+                  try {
+                     connection.restartIce();
+                     console.log(
+                        `🔄 ICE restart initiated after disconnect for ${viewerId}`
+                     );
+                  } catch (err) {
+                     console.error(
+                        `❌ Error restarting ICE after disconnect:`,
+                        err
+                     );
+                  }
+               }
+            }, 1000);
+         } else if (state === "connected" || state === "completed") {
+            console.log(`✅ ICE connection established for ${viewerId}`);
+            // Получаем статистику при успешном соединении
+            connection.getStats().then((stats) => {
+               console.log(
+                  `📊 Successful connection stats for ${viewerId}:`,
+                  stats
+               );
+            });
+         } else if (state === "checking") {
+            console.log(`🔍 ICE connection checking for ${viewerId}...`);
+         }
       };
 
       viewerConnections.set(viewerId, connection);
@@ -787,83 +972,11 @@ onMounted(() => {
          console.log("🎮 Control command received:", data);
       });
 
-      // Подписываемся на события screen sharing (для зрителей)
-      websocketService.onScreenShareStart(async (data) => {
-         console.log("📺 Screen share started by admin:", data);
-         // Зрители готовы принимать видеопоток
-         // Ждем offer от администратора
-      });
+      // Больше не используем WebRTC screen sharing
+      // Все пользователи видят один и тот же iframe с синхронизированным URL
 
-      websocketService.onScreenShareOffer(async (data) => {
-         console.log("📺 Screen share offer received:", data);
-         // Обработка WebRTC offer от администратора
-         if (!isAdmin.value) {
-            await handleScreenShareOffer(data);
-         }
-      });
-
-      // Подписываемся на ICE candidates (для зрителей)
-      if (!isAdmin.value) {
-         websocketService.onIceCandidate((data) => {
-            const { candidate, from } = data;
-            console.log("🧊 ICE candidate received from:", from, candidate);
-            if (peerConnection && candidate) {
-               peerConnection
-                  .addIceCandidate(new RTCIceCandidate(candidate))
-                  .then(() => {
-                     console.log("✅ ICE candidate added");
-                  })
-                  .catch((error) => {
-                     console.error("❌ Error adding ICE candidate:", error);
-                  });
-            } else {
-               console.warn(
-                  "⚠️ Cannot add ICE candidate - peerConnection:",
-                  !!peerConnection,
-                  "candidate:",
-                  !!candidate
-               );
-            }
-         });
-      }
-
-      websocketService.onScreenShareStream((stream) => {
-         console.log("📺 Screen share stream received:", stream);
-         remoteStream.value = stream;
-         if (viewerVideo.value) {
-            viewerVideo.value.srcObject = stream;
-         }
-      });
-
-      // Автоматически начинаем screen sharing для администратора
-      // Используем событие загрузки iframe для более точного тайминга
-      if (isAdmin.value) {
-         // Ждем загрузки iframe перед началом трансляции
-         const startSharingAfterLoad = () => {
-            // Дополнительная задержка для полной загрузки содержимого iframe
-            setTimeout(() => {
-               if (!isSharingScreen.value) {
-                  startScreenShare();
-               }
-            }, 1000);
-         };
-
-         // Если iframe уже загружен, начинаем сразу
-         if (iframeRef.value && iframeRef.value.contentWindow) {
-            startSharingAfterLoad();
-         } else {
-            // Иначе ждем события load
-            const checkIframeLoad = setInterval(() => {
-               if (iframeRef.value && iframeRef.value.contentWindow) {
-                  clearInterval(checkIframeLoad);
-                  startSharingAfterLoad();
-               }
-            }, 100);
-
-            // Очищаем интервал через 10 секунд, если iframe не загрузился
-            setTimeout(() => clearInterval(checkIframeLoad), 10000);
-         }
-      }
+      // Больше не используем WebRTC screen sharing
+      // Все пользователи видят один и тот же iframe с синхронизированным URL
       console.log("✅ Subscribed to control-command events");
 
       const roomId = getRoomId();
@@ -900,7 +1013,7 @@ onMounted(() => {
 
 // Отключение при размонтировании
 onUnmounted(() => {
-   stopScreenShare();
+   // Больше не используем WebRTC screen sharing
    websocketService.leaveRoom();
    websocketService.removeAllListeners();
 });

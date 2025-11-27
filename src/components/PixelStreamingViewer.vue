@@ -112,6 +112,7 @@ const getStreamServerUrl = () => {
       StartVideoMuted: "false",
       AutoConnect: "false",
       LightMode: "false",
+      FakeMouseWithTouches: "true",
    });
 
    // Если порт 80, не добавляем его в URL (стандартный HTTP порт)

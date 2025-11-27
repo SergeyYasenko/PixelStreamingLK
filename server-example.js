@@ -361,6 +361,12 @@ io.on("connection", (socket) => {
 });
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-   console.log(`WebSocket server running on port ${PORT}`);
+server.listen(PORT, "0.0.0.0", () => {
+   console.log("==========================================");
+   console.log(`🚀 WebSocket server running on port ${PORT}`);
+   console.log(`📍 Local: http://localhost:${PORT}`);
+   console.log(`🌐 Network: http://0.0.0.0:${PORT}`);
+   console.log(`🔧 STREAM_SERVER_HOST: ${process.env.STREAM_SERVER_HOST || "auto-detect"}`);
+   console.log(`🔧 STREAM_SERVER_PORT: ${process.env.STREAM_SERVER_PORT || "80"}`);
+   console.log("==========================================");
 });

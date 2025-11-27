@@ -2,7 +2,6 @@
    <div class="login-wrapper">
       <video class="background-video" autoplay muted loop playsinline>
          <source :src="loginVideo" type="video/mp4" />
-         <!-- Fallback если видео не загрузится -->
       </video>
       <div class="background-video-overlay"></div>
 
@@ -21,56 +20,75 @@
                   />
                </div>
                <div class="form-group">
-                  <label for="projectUrl" class="form-group-label"
-                     >Ссылка на проект<span class="required">*</span></label
-                  >
-                  <input
-                     type="url"
-                     id="projectUrl"
-                     v-model="projectUrl"
-                     placeholder="https://example.com"
-                     required
-                     class="form-group-input"
-                  />
-               </div>
-               <div class="form-group">
-                  <label for="role" class="form-group-label">
-                     Роль<span class="required">*</span>
+                  <label for="streamerId" class="form-group-label">
+                     Комната (Streamer ID)<span class="required">*</span>
                   </label>
                   <div
-                     ref="selectElement"
+                     ref="streamerSelectElement"
                      class="select-wrapper"
                      :class="{
-                        'is-open': isSelectOpen,
-                        'has-error': roleError,
+                        'is-open': isStreamerSelectOpen,
+                        'has-error': streamerError,
+                        'is-disabled': availableRooms.length === 0,
                      }"
                   >
-                     <input type="hidden" name="role" :value="role" required />
+                     <input
+                        type="hidden"
+                        name="streamerId"
+                        :value="selectedStreamerId"
+                        required
+                     />
                      <button
                         type="button"
-                        id="role"
+                        id="streamerId"
                         class="custom-select-button"
-                        :class="{ 'has-value': role }"
-                        @mousedown="handleSelectMouseDown"
+                        :class="{
+                           'has-value': selectedStreamerId,
+                           'is-disabled': availableRooms.length === 0,
+                        }"
+                        :disabled="availableRooms.length === 0"
+                        @mousedown="handleStreamerSelectMouseDown"
                      >
                         <span class="select-button-text">
-                           {{ getSelectedRoleLabel() }}
+                           {{
+                              availableRooms.length === 0
+                                 ? "Нет доступных комнат"
+                                 : getSelectedStreamerLabel()
+                           }}
                         </span>
                      </button>
-                     <div v-if="isSelectOpen" class="custom-select-dropdown">
+                     <div
+                        v-if="isStreamerSelectOpen && availableRooms.length > 0"
+                        class="custom-select-dropdown"
+                     >
                         <div
-                           v-for="option in filteredRoleOptions"
-                           :key="option.value"
+                           v-for="room in availableRooms"
+                           :key="room.streamerId"
                            class="custom-select-option"
-                           :class="{ 'is-selected': role === option.value }"
-                           @click="selectOption(option.value)"
+                           :class="{
+                              'is-selected':
+                                 selectedStreamerId === room.streamerId,
+                           }"
+                           @click="selectStreamerOption(room.streamerId)"
                         >
-                           {{ option.label }}
+                           {{ room.label }}
                         </div>
                      </div>
                   </div>
+                  <p v-if="isLoadingRooms" class="form-hint">
+                     Загрузка списка комнат...
+                  </p>
+                  <p v-else-if="availableRooms.length === 0" class="form-hint">
+                     Нет доступных комнат. Проверьте подключение к серверу.
+                  </p>
                </div>
-               <button type="submit" class="login-button">Войти</button>
+               <button
+                  type="submit"
+                  class="login-button"
+                  :disabled="availableRooms.length === 0 || !selectedStreamerId"
+               >
+                  Подключиться
+               </button>
             </form>
          </div>
       </div>
@@ -84,60 +102,134 @@ import loginVideo from "@/assets/login-bg-video.mp4";
 const emit = defineEmits(["login-success"]);
 
 const name = ref("");
-const projectUrl = ref("");
-const role = ref("");
-const isSelectOpen = ref(false);
-const selectElement = ref(null);
-const roleError = ref(false);
+const selectedStreamerId = ref("");
+const availableRooms = ref([]);
+const isLoadingRooms = ref(false);
+const isStreamerSelectOpen = ref(false);
+const streamerSelectElement = ref(null);
+const streamerError = ref(false);
 
-const roleOptions = [
-   { value: "", label: "Выберите роль" },
-   { value: "admin", label: "Администратор" },
-   { value: "viewer", label: "Наблюдатель" },
-];
-
-// Фильтруем опции: если роль выбрана, убираем опцию "Выберите роль"
-const filteredRoleOptions = computed(() => {
-   if (role.value) {
-      return roleOptions.filter((opt) => opt.value !== "");
-   }
-   return roleOptions;
-});
-
-const getSelectedRoleLabel = () => {
-   const selected = roleOptions.find((opt) => opt.value === role.value);
-   return selected ? selected.label : "Выберите роль";
+const getStreamServerUrl = () => {
+   const host = import.meta.env.VITE_STREAM_SERVER_HOST || "72.61.228.213";
+   const port = import.meta.env.VITE_STREAM_PORT || "80";
+   const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+   return `${protocol}//${host}:${port}`;
 };
 
-const handleSelectMouseDown = (event) => {
-   // Реагируем только на левую кнопку мыши (button === 0)
-   if (event.button !== 0) {
+const fetchAvailableRooms = async () => {
+   isLoadingRooms.value = true;
+   try {
+      const streamServerUrl = getStreamServerUrl();
+
+      // Pixel Streaming Signalling Server API для получения списка streamers
+      // Попробуем несколько возможных endpoints согласно документации
+      const possibleEndpoints = [
+         `${streamServerUrl}/api/streamers`,
+         `${streamServerUrl}/streamers`,
+         `${streamServerUrl}/api/list`,
+         `${streamServerUrl}/list`,
+         `${streamServerUrl}/api/sessions`,
+         `${streamServerUrl}/sessions`,
+      ];
+
+      let streamersList = null;
+
+      // Пытаемся получить список через HTTP API
+      for (const endpoint of possibleEndpoints) {
+         try {
+            const response = await fetch(endpoint, {
+               method: "GET",
+               headers: {
+                  "Content-Type": "application/json",
+               },
+            });
+
+            if (response.ok) {
+               const data = await response.json();
+
+               // Обрабатываем разные форматы ответа API
+               if (Array.isArray(data)) {
+                  streamersList = data;
+               } else if (data.streamers && Array.isArray(data.streamers)) {
+                  streamersList = data.streamers;
+               } else if (data.list && Array.isArray(data.list)) {
+                  streamersList = data.list;
+               } else if (data.sessions && Array.isArray(data.sessions)) {
+                  streamersList = data.sessions;
+               }
+
+               if (streamersList && streamersList.length > 0) {
+                  availableRooms.value = streamersList.map((item) => {
+                     const streamerId =
+                        typeof item === "string"
+                           ? item
+                           : item.id || item.streamerId || item.sessionId;
+                     const label =
+                        typeof item === "string"
+                           ? item
+                           : item.name || item.label || streamerId;
+                     return { streamerId, label };
+                  });
+                  isLoadingRooms.value = false;
+                  return;
+               }
+            }
+         } catch (apiError) {
+            // Продолжаем пробовать другие endpoints
+            continue;
+         }
+      }
+
+      // Если API не вернул список, оставляем список пустым
+      // НЕ используем дефолтные значения - только реальные данные от сервера
+      availableRooms.value = [];
+   } catch (error) {
+      // В случае ошибки список остается пустым
+      availableRooms.value = [];
+   } finally {
+      isLoadingRooms.value = false;
+   }
+};
+
+const getSelectedStreamerLabel = () => {
+   if (!selectedStreamerId.value) {
+      return "Выберите комнату";
+   }
+   const selected = availableRooms.value.find(
+      (room) => room.streamerId === selectedStreamerId.value
+   );
+   return selected ? selected.label : selectedStreamerId.value;
+};
+
+const handleStreamerSelectMouseDown = (event) => {
+   if (event.button !== 0 || availableRooms.value.length === 0) {
       return;
    }
    event.preventDefault();
-   // Открываем/закрываем при клике на select
-   isSelectOpen.value = !isSelectOpen.value;
+   isStreamerSelectOpen.value = !isStreamerSelectOpen.value;
 };
 
-const selectOption = (value) => {
-   role.value = value;
-   isSelectOpen.value = false;
-   roleError.value = false; // Убираем ошибку при выборе
+const selectStreamerOption = (streamerId) => {
+   selectedStreamerId.value = streamerId;
+   isStreamerSelectOpen.value = false;
+   streamerError.value = false;
 };
 
 const handleDocumentMouseDown = (event) => {
-   // Реагируем только на левую кнопку мыши (button === 0)
    if (event.button !== 0) {
       return;
    }
-   // Закрываем при клике вне select
-   if (selectElement.value && !selectElement.value.contains(event.target)) {
-      isSelectOpen.value = false;
+   if (
+      streamerSelectElement.value &&
+      !streamerSelectElement.value.contains(event.target)
+   ) {
+      isStreamerSelectOpen.value = false;
    }
 };
 
 onMounted(() => {
    document.addEventListener("mousedown", handleDocumentMouseDown);
+   fetchAvailableRooms();
 });
 
 onUnmounted(() => {
@@ -145,23 +237,23 @@ onUnmounted(() => {
 });
 
 const handleLogin = () => {
-   // Валидация: проверяем, что роль выбрана
-   if (!role.value) {
-      roleError.value = true;
-      isSelectOpen.value = true; // Открываем список для выбора
+   if (!selectedStreamerId.value) {
+      streamerError.value = true;
+      isStreamerSelectOpen.value = true;
       return;
    }
 
-   roleError.value = false;
+   if (availableRooms.value.length === 0) {
+      return;
+   }
 
-   // Если имя пустое, устанавливаем "Гость"
+   streamerError.value = false;
+
    const finalName = name.value.trim() || "Гость";
 
-   // Отправляем данные на родительский компонент
    emit("login-success", {
       name: finalName,
-      projectUrl: projectUrl.value,
-      role: role.value,
+      streamerId: selectedStreamerId.value,
    });
 };
 </script>
@@ -233,8 +325,7 @@ const handleLogin = () => {
    margin-left: 2px;
 }
 
-.form-group-input,
-.form-group-input-select {
+.form-group-input {
    width: 100%;
    padding-left: 0;
    color: #f2f2f2;
@@ -251,15 +342,25 @@ const handleLogin = () => {
    color: #f2f2f2;
 }
 
-.form-group-input:focus,
-.form-group-input-select:focus {
+.form-group-input:focus {
    outline: none;
+}
+
+.form-hint {
+   margin-top: 0.5rem;
+   font-size: 0.875rem;
+   color: rgba(242, 242, 242, 0.7);
 }
 
 .select-wrapper {
    position: relative;
    display: inline-block;
    width: 100%;
+}
+
+.select-wrapper.is-disabled .custom-select-button {
+   opacity: 0.5;
+   cursor: not-allowed;
 }
 
 .select-wrapper::after {
@@ -302,8 +403,14 @@ const handleLogin = () => {
    transition: background-color 0.3s;
 }
 
-.custom-select-button:hover {
+.custom-select-button:hover:not(:disabled) {
    background-color: rgba(217, 217, 217, 0.5);
+}
+
+.custom-select-button:disabled,
+.custom-select-button.is-disabled {
+   cursor: not-allowed;
+   opacity: 0.6;
 }
 
 .select-button-text {
@@ -355,8 +462,13 @@ const handleLogin = () => {
    outline: none;
 }
 
-.login-button:hover {
+.login-button:hover:not(:disabled) {
    background: rgba(43, 43, 43, 0.3);
+}
+
+.login-button:disabled {
+   opacity: 0.5;
+   cursor: not-allowed;
 }
 
 .login-button:focus,

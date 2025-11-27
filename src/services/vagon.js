@@ -27,28 +27,4 @@ export function getVagonStreamUrl(streamId) {
    return streamId;
 }
 
-/**
- * Проверить статус стрима через API (если понадобится в будущем)
- * @param {string} streamId - ID стрима
- * @returns {Promise<Object>} Статус стрима
- */
-export async function checkStreamStatus(streamId) {
-   try {
-      // Здесь можно добавить логику проверки статуса через Vagon API
-      // Пока возвращаем базовую информацию
-      return {
-         streamId,
-         url: getVagonStreamUrl(streamId),
-         active: true,
-      };
-   } catch (error) {
-      console.error("Error checking stream status:", error);
-      return {
-         streamId,
-         url: getVagonStreamUrl(streamId),
-         active: false,
-         error: error.message,
-      };
-   }
-}
 

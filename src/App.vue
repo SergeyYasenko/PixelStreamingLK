@@ -6,8 +6,7 @@ import PixelStreamingViewer from "./components/PixelStreamingViewer.vue";
 const isLoggedIn = ref(false);
 const userData = ref({
    name: "",
-   projectUrl: "",
-   role: "",
+   streamerId: "",
 });
 
 const handleLoginSuccess = (data) => {
@@ -21,10 +20,8 @@ const handleLoginSuccess = (data) => {
       <Login v-if="!isLoggedIn" @login-success="handleLoginSuccess" />
       <PixelStreamingViewer
          v-else
-         :stream-url="userData.projectUrl || ''"
          :user-name="userData.name"
-         :project-url="userData.projectUrl"
-         :role="userData.role"
+         :streamer-id="userData.streamerId"
       />
    </div>
 </template>

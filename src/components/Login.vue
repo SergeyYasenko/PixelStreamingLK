@@ -159,7 +159,51 @@ const fetchAvailableRooms = async () => {
                }
 
                if (streamersList && streamersList.length > 0) {
-                  availableRooms.value = streamersList.map((item) => {
+                  // Проверяем доступность каждого streamer через реальные запросы
+                  const checkedRooms = [];
+
+                  // Функция для проверки доступности streamer с таймаутом
+                  const checkStreamerAvailability = async (
+                     streamerId,
+                     label
+                  ) => {
+                     const streamerUrl = `${streamServerUrl}/?StreamerId=${streamerId}`;
+
+                     try {
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(
+                           () => controller.abort(),
+                           2000
+                        );
+
+                        try {
+                           const response = await fetch(streamerUrl, {
+                              method: "HEAD",
+                              signal: controller.signal,
+                           });
+                           clearTimeout(timeoutId);
+                           // Если получили ответ (даже с ошибкой CORS), сервер доступен
+                           return { streamerId, label };
+                        } catch (fetchError) {
+                           clearTimeout(timeoutId);
+                           // Если это ошибка CORS (TypeError), сервер может быть доступен
+                           if (
+                              fetchError.name === "TypeError" &&
+                              fetchError.message.includes("CORS")
+                           ) {
+                              return { streamerId, label };
+                           }
+                           // Для других ошибок (таймаут, сеть) - streamer недоступен
+                           throw fetchError;
+                        }
+                     } catch (checkError) {
+                        // Streamer недоступен (таймаут или сетевая ошибка)
+                        return null;
+                     }
+                  };
+
+                  // Проверяем все streamers параллельно
+                  const checkPromises = streamersList.map(async (item) => {
                      const streamerId =
                         typeof item === "string"
                            ? item
@@ -168,8 +212,14 @@ const fetchAvailableRooms = async () => {
                         typeof item === "string"
                            ? item
                            : item.name || item.label || streamerId;
-                     return { streamerId, label };
+
+                     return await checkStreamerAvailability(streamerId, label);
                   });
+
+                  const results = await Promise.all(checkPromises);
+                  checkedRooms.push(...results.filter((room) => room !== null));
+
+                  availableRooms.value = checkedRooms;
                   isLoadingRooms.value = false;
                   return;
                }

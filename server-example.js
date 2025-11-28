@@ -2,6 +2,34 @@ import express from "express";
 import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
+import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+// Загрузка переменных окружения из .env файла
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+try {
+   const envPath = join(__dirname, ".env");
+   const envFile = readFileSync(envPath, "utf8");
+   envFile.split("\n").forEach((line) => {
+      const trimmedLine = line.trim();
+      if (trimmedLine && !trimmedLine.startsWith("#")) {
+         const [key, ...valueParts] = trimmedLine.split("=");
+         if (key && valueParts.length > 0) {
+            const value = valueParts.join("=").trim().replace(/^["']|["']$/g, "");
+            if (!process.env[key]) {
+               process.env[key] = value;
+            }
+         }
+      }
+   });
+   console.log("✅ Загружены переменные из .env файла");
+} catch (error) {
+   // .env файл не найден - это нормально, используем переменные окружения системы
+   // console.log("ℹ️  .env файл не найден, используем системные переменные окружения");
+}
 
 // Для Node.js версий ниже 18, может потребоваться node-fetch
 // Если fetch недоступен, установите: npm install node-fetch

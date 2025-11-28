@@ -12,6 +12,7 @@
       "server:stop": "pkill -f 'node server-example.js' || true",
       "server:restart": "npm run server:stop && sleep 1 && npm run server",
       "server:bg": "nohup node server-example.js > server.log 2>&1 &",
+      "diagnose": "node scripts/diagnose-connection.js",
       "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
       "start": "node server-example.js",
       "tunnel": "lt --port 3001",

@@ -218,32 +218,35 @@ app.get("/api/proxy/streamers", async (req, res) => {
                   (contentType.includes("text/html") || contentType.includes("text/plain"));
 
                if (isAvailable) {
-                  // Проверяем наличие поля "Streamer ID" в настройках Pixel Streaming
+                  // Проверяем доступность streamer
                   try {
                      const text = await response.text();
 
-                     // Ищем наличие поля "Streamer ID" в настройках
-                     const hasStreamerIdField = text.includes("Streamer ID") ||
-                        text.includes("StreamerId") ||
-                        text.includes("streamer-id") ||
-                        text.includes("streamerId");
-
                      // Проверяем, что это не страница ошибки
-                     const isErrorPage = text.includes("GAVE UP WAITING") ||
-                        text.includes("404") ||
-                        text.includes("Not Found");
+                     // Более мягкая проверка - ищем ошибки только в заголовках/ключевых местах
+                     const lowerText = text.toLowerCase();
+                     const isErrorPage =
+                        text.includes("GAVE UP WAITING") ||
+                        (lowerText.includes("<title") && lowerText.includes("404") && text.length < 5000) ||
+                        (text.includes("Cannot GET") && text.length < 500) ||
+                        (lowerText.includes("error") && lowerText.includes("not found") && text.length < 1000);
 
-                     const isReallyAvailable = hasStreamerIdField && !isErrorPage;
+                     // Если статус 200 OK, HTML, и это не страница ошибки - считаем доступным
+                     const isReallyAvailable = !isErrorPage && status === 200;
 
                      if (isReallyAvailable) {
                         availableStreamers.push(streamerId);
-                        console.log(`[Proxy] ✓ Streamer ${streamerId} is available (has Streamer ID field)`);
+                        console.log(`[Proxy] ✓ Streamer ${streamerId} is available (status: ${status})`);
                      } else {
-                        console.log(`[Proxy] ✗ Streamer ${streamerId} not available (no Streamer ID field or error page)`);
+                        console.log(`[Proxy] ✗ Streamer ${streamerId} not available (isErrorPage: ${isErrorPage}, status: ${status})`);
                      }
                   } catch (textError) {
                      console.log(`[Proxy] ✗ Streamer ${streamerId}: Error reading text: ${textError.message}`);
-                     // Если не удалось прочитать текст, считаем недоступным
+                     // Если статус 200, но не удалось прочитать - всё равно считаем доступным
+                     if (status === 200) {
+                        availableStreamers.push(streamerId);
+                        console.log(`[Proxy] ✓ Streamer ${streamerId} is available (status: ${status}, text read error ignored)`);
+                     }
                   }
                } else {
                   console.log(`[Proxy] ✗ Streamer ${streamerId} returned status ${status} or wrong content type`);
@@ -349,29 +352,32 @@ app.get("/api/proxy/check-streamer", async (req, res) => {
 
          // Проверяем, что ответ успешный и это HTML страница
          if (status >= 200 && status < 400 && (contentType.includes("text/html") || contentType.includes("text/plain"))) {
-            // Проверяем наличие поля "Streamer ID" в настройках Pixel Streaming
+            // Проверяем доступность streamer
             try {
                const text = await response.text();
 
-               // Ищем наличие поля "Streamer ID" в настройках
-               const hasStreamerIdField = text.includes("Streamer ID") ||
-                  text.includes("StreamerId") ||
-                  text.includes("streamer-id") ||
-                  text.includes("streamerId");
+               // Проверяем, что это не страница ошибки (мягкая проверка)
+               const lowerText = text.toLowerCase();
+               const isErrorPage =
+                  text.includes("GAVE UP WAITING") ||
+                  (lowerText.includes("<title") && lowerText.includes("404") && text.length < 5000) ||
+                  (text.includes("Cannot GET") && text.length < 500) ||
+                  (lowerText.includes("error") && lowerText.includes("not found") && text.length < 1000);
 
-               // Проверяем, что это не страница ошибки
-               const isErrorPage = text.includes("GAVE UP WAITING") ||
-                  text.includes("404") ||
-                  text.includes("Not Found");
+               // Если статус 200 OK и это не страница ошибки - считаем доступным
+               const isAvailable = !isErrorPage && status === 200;
 
-               const isAvailable = hasStreamerIdField && !isErrorPage;
-
-               console.log(`[Check Streamer] ${streamerId}: status=${status}, hasStreamerIdField=${hasStreamerIdField}, isErrorPage=${isErrorPage}, available=${isAvailable}`);
+               console.log(`[Check Streamer] ${streamerId}: status=${status}, isErrorPage=${isErrorPage}, available=${isAvailable}`);
 
                res.json({ available: isAvailable });
             } catch (textError) {
                console.log(`[Check Streamer] ${streamerId}: Error reading text: ${textError.message}`);
-               res.json({ available: false });
+               // Если статус 200, но не удалось прочитать - считаем доступным
+               if (status === 200) {
+                  res.json({ available: true });
+               } else {
+                  res.json({ available: false });
+               }
             }
          } else {
             console.log(`[Check Streamer] ${streamerId}: status=${status} or wrong contentType=${contentType}, not available`);
